@@ -1,232 +1,351 @@
-// SOLPORT — boot, game loop, camera, menus, death/bust flow and save wiring.
-// Jax Marlowe, driver for fixer Mara Voss, in the fictional coastal city Solport.
+// SOLPORT — main.js (retry session, 19 Nov 2026)
+// Boot + game loop + state machine for the open-world crime game.
+// Menu -> playing -> paused / wasted / busted; ?shot= stages a frozen
+// deterministic scene for screenshots instead of playing.
+
 import * as THREE from 'three';
-import { CFG } from './config.js';
-import { mulberry32, pick } from './utils.js';
+import { CONFIG, SUN_PACKAGES, HOSPITAL } from './config.js';
+import { buildCity } from './city.js';
 import { AudioSys } from './audio.js';
 import { Input } from './input.js';
-import { buildCity } from './city.js';
-import { Traffic, makeCarMesh } from './vehicles.js';
+import { HUD } from './hud.js';
+import { Traffic, makePlayerCar, updatePlayerCar } from './vehicles.js';
 import { Pedestrians } from './pedestrians.js';
 import { Police } from './police.js';
 import { Missions } from './missions.js';
-import { HUD } from './hud.js';
-import { makePlayerMesh, updatePlayer } from './player.js';
-import { loadSave, writeSave, clearSave } from './save.js';
-import { applyShot } from './shots.js';
+import { createPlayer, updateOnFoot, tryEnterExit, shoot, punch } from './player.js';
+import { applyShot, SHOT_NAMES } from './shots.js';
+import { loadSave, writeSave, clearSave, defaultSave } from './save.js';
+import { dist2 } from './utils.js';
 
-const params = new URLSearchParams(location.search);
-const SHOT = params.get('shot');
-const SEED = Number(params.get('seed') || 1337);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const canvas = document.getElementById('game');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 900);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+camera.position.set(-30, 12, -30);
 
-const G = {
-  cfg: CFG, scene, camera, renderer,
-  state: 'menu', // menu | playing | paused | wasted | busted
-  time: 0, hasSave: false, shotsFiredAt: null,
-  stats: { kills: 0, missions: 0, fares: 0, packages: 0 },
-  sunCollected: new Set(), parkedCars: [], pickups: [],
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---- Shared state (S) passed to every module ----
+const S = {
+  scene, camera, renderer,
+  input: new Input(canvas),
+  audio: new AudioSys(),
+  hud: null, city: null, traffic: null, peds: null, police: null, missions: null,
+  player: null, car: null,
+  cash: CONFIG.startCash, wanted: 0,
+  saveData: loadSave() || defaultSave(),
+  packageSpots: SUN_PACKAGES,
+  mode: 'menu', // menu | playing | paused | wasted | busted
+  frozen: false, shotMode: null, busted: false,
+  time: 0, saveTimer: 0,
+  effects: [], // {mesh|light, ttl}
+  packageMeshes: [], healthMeshes: [], weaponMeshes: [],
 };
-G.audio = new AudioSys();
-G.input = new Input(renderer.domElement);
-G.city = buildCity(scene, SEED);
-G.traffic = new Traffic(scene, G.city, CFG.traffic.count);
-G.peds = new Pedestrians(scene, G.city, CFG.peds.count);
-G.police = new Police(scene, G.city);
-G.missions = new Missions(scene, G.city);
-G.hud = new HUD(G);
+S.hud = new HUD();
+S.banner = (t, s, sec) => S.hud.banner(t, s, sec);
+S.hudFlash = (t) => S.hud.flash(t);
 
-// Player.
-G.player = {
-  mesh: makePlayerMesh(), x: G.city.spots.start.x, z: G.city.spots.start.z,
-  yaw: 0, camYaw: Math.PI, camPitch: 0.32, hp: 100, cash: CFG.startCash,
-  respect: 0, weapon: 'pistol', ammo: 0, inCar: false, car: null, lastShot: 0,
+// Collision: circle vs building AABBs.
+S.collide = (x, z, r) => {
+  for (const b of S.city.colliders) {
+    if (x > b.minX - r && x < b.maxX + r && z > b.minZ - r && z < b.maxZ + r) return true;
+  }
+  return false;
 };
-scene.add(G.player.mesh);
-G.player.mesh.position.set(G.player.x, 0, G.player.z);
 
-// Parked civilian cars (stealable — stealing one is a crime).
+// Hitscan tracer + muzzle flash (faded out in the loop).
+S.tracer = (from, to) => {
+  const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.95 }));
+  scene.add(line);
+  S.effects.push({ obj: line, ttl: 0.12, max: 0.12, fade: true });
+};
+S.muzzle = (pos) => {
+  const light = new THREE.PointLight(0xffc860, 60, 18);
+  light.position.copy(pos);
+  scene.add(light);
+  S.effects.push({ obj: light, ttl: 0.09, max: 0.09, fade: false });
+};
+
+// ---- World ----
+S.city = buildCity(scene);
+S.traffic = new Traffic(scene);
+S.peds = new Pedestrians(scene);
+S.police = new Police(scene);
+S.missions = new Missions(scene);
+S.player = createPlayer(scene, -140, -40);
+S.player.hp = CONFIG.playerHp;
+S.player.weapon = S.saveData.weapon || 'pistol';
+S.player.ammo = { ...S.player.ammo, ...(S.saveData.ammo || {}) };
+S.cash = S.saveData.cash;
+S.car = makePlayerCar(scene, -137, -38, 0xc23b2e, false);
+
+// Sun-package meshes (collected ones stay hidden).
 {
-  const rng = mulberry32(99);
-  const spots = [[-110, 26], [22, -62], [110, 114], [-22, -110], [154, 26]];
-  const colors = [0xc0392b, 0x2980b9, 0xe6c34a, 0x7f8c8d, 0x27ae60];
-  spots.forEach(([x, z], i) => {
-    const mesh = makeCarMesh(colors[i]); scene.add(mesh);
-    const car = { mesh, x, z, yaw: rng() * Math.PI * 2, speed: 0, name: 'Sedan' };
-    mesh.position.set(x, 0, z); mesh.rotation.y = car.yaw;
-    G.parkedCars.push(car);
-  });
-}
-
-// Health packs: green crosses at hospital, Mara's, dock, safehouse.
-for (const [x, z] of [[154, -146], [-168, 58], [168, 168], [-168, -146]]) {
-  const g = new THREE.Group();
-  const box = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), new THREE.MeshLambertMaterial({ color: 0xffffff }));
-  g.add(box);
-  const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.25, 0.1), new THREE.MeshBasicMaterial({ color: 0x27ae60 }));
-  c1.position.z = 0.62; g.add(c1);
-  const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.8, 0.1), new THREE.MeshBasicMaterial({ color: 0x27ae60 }));
-  c2.position.z = 0.62; g.add(c2);
-  g.position.set(x, 0.8, z); scene.add(g);
-  G.pickups.push({ mesh: g, x, z, taken: false });
-}
-
-// Taxi fares: a waiting pedestrian + green destination beacon.
-G.taxi = {
-  x: -110, z: 30, dx: 66, dz: 66, active: false,
-  marker: new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 40, 10, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0x2ecc71, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false })),
-  respawn() {
-    const rng = mulberry32((Math.random() * 1e9) | 0);
-    const a = pick(rng, G.city.intersections), b = pick(rng, G.city.intersections);
-    this.x = a.x + 8; this.z = a.z; this.dx = b.x; this.dz = b.z;
-    this.marker.position.set(this.dx, 20, this.dz);
-  },
-};
-G.taxi.marker.position.set(G.taxi.dx, 20, G.taxi.dz);
-G.taxi.marker.visible = false;
-scene.add(G.taxi.marker);
-
-// --- Flow ---------------------------------------------------------------
-G.hasSave = !!loadSave();
-function applyLoadedSave(s) {
-  G.player.cash = s.cash ?? CFG.startCash;
-  G.player.respect = s.respect ?? 0;
-  G.stats = { ...G.stats, ...(s.stats || {}) };
-  G.player.weapon = s.weapon || 'pistol';
-  (s.packages || []).forEach(i => {
-    const p = G.city.packages[i];
-    if (p) { p.taken = true; p.mesh.visible = false; G.sunCollected.add(i); }
-  });
-  return s.mission ?? 0;
-}
-G.startGame = (cont) => {
-  G.audio.ensure();
-  G.state = 'playing';
-  G.hud.hideMenu();
-  const s = cont ? loadSave() : null;
-  const missionIdx = s ? applyLoadedSave(s) : 0;
-  G.missions.start(G, missionIdx);
-  G.hud.setObjective(G.missions.objectiveText());
-  G.hud.banner('SOLPORT', G.city.districtAt(G.player.x, G.player.z) + ' — ' + G.missions.objectiveText());
-};
-G.resumeGame = () => { G.state = 'playing'; G.hud.hideMenu(); };
-G.restartGame = () => {
-  clearSave();
-  G.player.hp = 100; G.player.cash = CFG.startCash; G.player.respect = 0;
-  G.player.weapon = 'pistol'; G.player.x = G.city.spots.start.x; G.player.z = G.city.spots.start.z;
-  G.stats = { kills: 0, missions: 0, fares: 0, packages: 0 };
-  G.police.clearWanted(true);
-  G.missions.start(G, 0);
-  G.state = 'playing'; G.hud.hideMenu();
-  G.hud.setObjective(G.missions.objectiveText());
-};
-G.toMenu = () => { G.state = 'menu'; G.showStartMenu(); };
-G.showStartMenu = () => {
-  G.hud.showMenu('start', 'SOLPORT', `
-    <p class="story">Solport. Sun, salt air, and everybody owes somebody. Jax Marlowe came back to drive
-    for fixer <b>Mara Voss</b> — five jobs, one city, and the Harbor Kings in the way.</p>
-    <p><b>WASD</b> move / drive &nbsp;•&nbsp; <b>Mouse</b> camera &nbsp;•&nbsp; <b>Shift</b> run &nbsp;•&nbsp;
-    <b>E</b> enter / exit car &nbsp;•&nbsp; <b>Click</b> shoot &nbsp;•&nbsp; <b>F</b> punch &nbsp;•&nbsp;
-    <b>Space</b> handbrake &nbsp;•&nbsp; <b>Esc</b> pause &nbsp;•&nbsp; <b>M</b> mute</p>
-    <p class="dim">Steal cars, dodge the PD, run taxi fares, find 10 sun-packages. An original game —
-    no Rockstar content, all art / sound / story made for this entry.</p>`);
-};
-G.wasted = () => {
-  if (G.state !== 'playing') return;
-  G.state = 'wasted'; G.audio.fail();
-  const lost = Math.round(G.player.cash * CFG.economy.hospitalLoss);
-  G.player.cash -= lost;
-  G.player.hp = 100; G.player.x = G.city.spots.hospital.x; G.player.z = G.city.spots.hospital.z;
-  G.player.inCar = false; G.player.car = null; G.player.mesh.visible = true;
-  G.police.clearWanted(true);
-  G.hud.showMenu('end', 'WASTED', `<p>You woke up at Solport General. The hospital took $${lost}.</p><p>Cash: $${G.player.cash} — Missions: ${G.stats.missions}/5</p>`);
-};
-G.busted = () => {
-  if (G.state !== 'playing') return;
-  G.state = 'busted'; G.audio.fail();
-  const fine = Math.min(200, Math.round(G.player.cash * 0.1));
-  G.player.cash -= fine;
-  G.player.hp = 100; G.player.x = G.city.spots.hospital.x; G.player.z = G.city.spots.hospital.z;
-  G.player.inCar = false; G.player.car = null; G.player.mesh.visible = true;
-  G.police.clearWanted(true);
-  G.hud.showMenu('end', 'BUSTED', `<p>The PD booked you and took a $${fine} fine.</p><p>Cash: $${G.player.cash} — Missions: ${G.stats.missions}/5</p>`);
-};
-
-// Pause / mute keys.
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'Escape' || e.code === 'KeyP') {
-    if (G.state === 'playing') { G.state = 'paused'; G.hud.showMenu('pause', 'PAUSED', `<p>Mission ${Math.min(G.missions.index + 1, 5)}/5 — ${G.missions.def ? G.missions.def.name : 'Free roam'}</p><p>Cash $${G.player.cash} • Respect ${G.player.respect} • Kills ${G.stats.kills}</p>`); }
-    else if (G.state === 'paused') G.resumeGame();
+  const geo = new THREE.SphereGeometry(0.9, 12, 10);
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffd23c, emissive: 0xffb300, emissiveIntensity: 1.6 });
+  for (const [x, z] of SUN_PACKAGES) {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, 1.2, z);
+    scene.add(m);
+    S.packageMeshes.push({ mesh: m, x, z, key: `${x},${z}` });
+    if (S.saveData.packages.includes(`${x},${z}`)) m.visible = false;
   }
-  if (e.code === 'KeyM') { const m = G.audio.toggleMute(); G.hud.setPrompt(m ? 'Muted (M to unmute)' : ''); }
-});
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+}
+// Health packs (green cross boxes) + weapon pickups.
+function addPickup(x, z, kind) {
+  const color = kind === 'health' ? 0x2ecc71 : 0x9a4fd9;
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 1.4, 1.4),
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5, roughness: 0.4 })
+  );
+  m.position.set(x, 0.9, z);
+  scene.add(m);
+  (kind === 'health' ? S.healthMeshes : S.weaponMeshes).push({ mesh: m, x, z, kind });
+}
+addPickup(60, 150, 'health'); addPickup(-120, 120, 'health'); addPickup(100, -140, 'health'); addPickup(-160, -100, 'health');
+addPickup(140, 120, 'smg'); addPickup(-40, 90, 'smg');
 
-// --- Camera: third-person orbit, behind the car when driving. ----------
+// ---- Camera ----
 function updateCamera(dt) {
-  const P = G.player;
-  const dist = P.inCar ? 11.5 : 8;
-  const height = P.inCar ? 4.2 : 3.4;
-  const yaw = P.inCar ? P.car.yaw : P.camYaw;
-  // The camera sits behind the facing direction (car heading, or mouse orbit on foot).
-  const tx = P.x - Math.sin(yaw) * dist;
-  const tz = P.z - Math.cos(yaw) * dist;
-  const ty = height + P.camPitch * 6;
-  if (G.shotMode) { camera.position.set(tx, ty, tz); } // snap: no settle time in captures
-  else {
-    camera.position.x += (tx - camera.position.x) * Math.min(1, dt * 6);
-    camera.position.y += (ty - camera.position.y) * Math.min(1, dt * 6);
-    camera.position.z += (tz - camera.position.z) * Math.min(1, dt * 6);
+  const p = S.player;
+  if (S.shotMode) return; // shots fix the camera themselves
+  if (!p.onFoot && S.car) {
+    const a = S.car.angle;
+    const tx = S.car.x - Math.sin(a) * 11;
+    const tz = S.car.z - Math.cos(a) * 11;
+    camera.position.lerp(new THREE.Vector3(tx, 4.5, tz), Math.min(1, dt * 5));
+    camera.lookAt(S.car.x + Math.sin(a) * 6, 1.5, S.car.z + Math.cos(a) * 6);
+  } else {
+    p.camAngle += S.input.mouseDX * 0.005;
+    p.camPitch = THREE.MathUtils.clamp(p.camPitch + S.input.mouseDY * 0.003, 0.05, 1.1);
+    const dist = 8.5;
+    const cx = p.x - Math.sin(p.camAngle) * Math.cos(p.camPitch) * dist;
+    const cz = p.z - Math.cos(p.camAngle) * Math.cos(p.camPitch) * dist;
+    const cy = 1.8 + Math.sin(p.camPitch) * dist;
+    camera.position.lerp(new THREE.Vector3(cx, cy, cz), Math.min(1, dt * 8));
+    camera.lookAt(p.x, 1.8, p.z);
   }
-  camera.lookAt(P.x, P.inCar ? 1.6 : 1.8, P.z);
 }
 
-// --- Main loop ----------------------------------------------------------
-let last = performance.now(), saveT = 0;
-function loop(now) {
-  requestAnimationFrame(loop);
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (G.state === 'playing') {
-    G.time += dt;
-    updatePlayer(G, dt);
-    G.traffic.update(G, dt);
-    G.peds.update(G, dt);
-    G.police.update(G, dt);
-    G.missions.update(G, dt);
-    G.city.update(dt, G.time);
-    G.hud.update(dt);
-    saveT += dt;
-    if (saveT > 10) { saveT = 0; writeSave(G); }
+// ---- Death / bust ----
+function respawn(reason) {
+  S.player.hp = CONFIG.playerHp;
+  S.wanted = 0;
+  S.police.clearAll(scene);
+  S.player.x = HOSPITAL[0]; S.player.z = HOSPITAL[1];
+  S.player.onFoot = true;
+  S.player.mesh.visible = true;
+  if (S.car) { scene.remove(S.car.mesh); S.car = null; }
+  S.car = makePlayerCar(scene, HOSPITAL[0] + 6, HOSPITAL[1], 0xc23b2e, false);
+  S.mode = 'playing';
+  S.hud.hideEnd();
+  S.banner(reason === 'wasted' ? 'WASTED' : 'BUSTED', reason === 'wasted' ? 'Mara paid the hospital bill.' : 'Mara posted your bail.', 4);
+}
+function die(reason) {
+  if (S.mode !== 'playing') return;
+  S.mode = reason;
+  const cost = reason === 'wasted' ? 200 : 150;
+  S.cash = Math.max(0, S.cash - cost);
+  if (reason === 'wasted') S.saveData.stats.deaths += 1;
+  else S.saveData.stats.busted += 1;
+  S.audio.fail();
+  S.audio.siren(false);
+  S.hud.showEnd(
+    reason === 'wasted' ? 'WASTED' : 'BUSTED',
+    `${reason === 'wasted' ? 'Hospital bill' : 'Bail'} -$${cost}. Cash $${S.cash}. Click to get back on the streets.`
+  );
+}
+
+// ---- Pickups / fares ----
+function updatePickups() {
+  const p = S.player;
+  for (const pkg of S.packageMeshes) {
+    if (!pkg.mesh.visible) continue;
+    pkg.mesh.rotation.y += 0.03;
+    if (dist2(p.x, p.z, pkg.x, pkg.z) < 2.5) {
+      pkg.mesh.visible = false;
+      S.saveData.packages.push(pkg.key);
+      S.cash += 100;
+      S.hudFlash(`Sun-package found! +$100 (${S.saveData.packages.length}/10)`);
+      S.audio.chime();
+    }
   }
+  for (const h of S.healthMeshes) {
+    h.mesh.rotation.y += 0.02;
+    if (dist2(p.x, p.z, h.x, h.z) < 2.5 && p.hp < CONFIG.playerHp) {
+      p.hp = Math.min(CONFIG.playerHp, p.hp + 40);
+      h.mesh.visible = false;
+      setTimeout(() => { h.mesh.visible = true; }, 30000);
+      S.hudFlash('Health +40');
+      S.audio.chime();
+    }
+  }
+  for (const w of S.weaponMeshes) {
+    w.mesh.rotation.y += 0.02;
+    if (dist2(p.x, p.z, w.x, w.z) < 2.5) {
+      if (w.kind === 'smg') {
+        p.weapon = 'smg';
+        p.ammo.smg = (p.ammo.smg || 0) + 60;
+        S.saveData.weapon = 'smg';
+        S.hudFlash('Picked up the SMG!');
+      }
+      w.mesh.visible = false;
+      setTimeout(() => { w.mesh.visible = true; }, 45000);
+      S.audio.chime();
+    }
+  }
+  // Taxi fare: drive up to the waving customer.
+  if (!p.onFoot && S.car) {
+    const f = S.peds.fare;
+    if (dist2(S.car.x, S.car.z, f.x, f.z) < 6) {
+      S.peds.completeFare();
+      S.cash += 60;
+      S.saveData.stats.fares += 1;
+      S.hudFlash('Fare complete +$60');
+      S.audio.chime();
+    }
+  }
+}
+
+// ---- Main loop ----
+const clock = new THREE.Clock();
+let firstFrame = true;
+
+function tick() {
+  requestAnimationFrame(tick);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  S.time += dt;
+
+  if (S.mode === 'playing' && !S.frozen) {
+    // Edge-triggered keys.
+    if (S.input.pressed('escape') || S.input.pressed('p')) {
+      S.mode = 'paused';
+      S.hud.showPause(true);
+    }
+    if (S.input.pressed('m')) S.hudFlash(S.audio.toggleMute() ? 'Muted' : 'Sound on');
+    if (S.input.pressed('e')) tryEnterExit(S);
+    if (S.input.pressed('f') && S.player.onFoot) punch(S);
+    if (S.input.pressed('1')) { S.player.weapon = 'pistol'; S.saveData.weapon = 'pistol'; }
+    if (S.input.pressed('2') && (S.player.ammo.smg || 0) > 0) { S.player.weapon = 'smg'; S.saveData.weapon = 'smg'; }
+    if (S.input.clickQueued && S.player.onFoot && S.player.weapon !== 'fists') shoot(S);
+
+    if (S.player.onFoot) updateOnFoot(S, dt);
+    else if (S.car) updatePlayerCar(S.car, S.input, dt, S.collide);
+
+    S.traffic.update(dt, S.player);
+    S.peds.update(dt);
+    S.police.sync(scene, S.wanted, S.player.x, S.player.z);
+    S.police.update(dt, S);
+    S.missions.update(dt, S);
+    updatePickups();
+
+    // Engine hum + siren follow state.
+    S.audio.setEngine(S.car && !S.player.onFoot ? Math.abs(S.car.speed) / CONFIG.carMaxSpeed : 0, !S.player.onFoot);
+    S.audio.siren(S.wanted > 0);
+
+    // Beacon pulse.
+    if (S.city.beacon.visible) {
+      const s = 1 + Math.sin(S.time * 3) * 0.15;
+      S.city.ring.scale.set(s, s, 1);
+    }
+
+    // Death / bust.
+    if (S.player.hp <= 0) die('wasted');
+    else if (S.busted) { S.busted = false; die('busted'); }
+
+    // Autosave.
+    S.saveTimer += dt;
+    if (S.saveTimer > 10) {
+      S.saveTimer = 0;
+      S.saveData.cash = S.cash;
+      S.saveData.missionIndex = S.missions.index;
+      S.saveData.ammo = S.player.ammo;
+      writeSave(S.saveData);
+    }
+  }
+
+  // Fade tracer / muzzle effects.
+  for (let i = S.effects.length - 1; i >= 0; i--) {
+    const e = S.effects[i];
+    e.ttl -= dt;
+    if (e.fade && e.obj.material) e.obj.material.opacity = Math.max(0, e.ttl / e.max);
+    if (e.ttl <= 0) {
+      scene.remove(e.obj);
+      if (e.obj.geometry) e.obj.geometry.dispose();
+      S.effects.splice(i, 1);
+    }
+  }
+
   updateCamera(dt);
+  S.hud.update(dt, S);
+  S.input.endFrame();
   renderer.render(scene, camera);
-  G.input.endFrame();
-  if (G.shotsFiredAt) G.shotsFiredAt = null;
+  if (firstFrame) {
+    firstFrame = false;
+    window.SOLPORT_READY = true;
+    document.getElementById('loading').classList.add('hidden');
+  }
 }
 
-// Debug handle for play-testing (harmless in the shipped game).
-window.__G = G;
-
-// --- Boot ---------------------------------------------------------------
-G.showStartMenu();
-if (SHOT) {
-  // Deterministic screenshot staging: skip the menu, stage the scene.
-  G.shotMode = true;
-  G.startGame(false);
-  applyShot(G, SHOT);
-  G.hud.hideMenu();
+// ---- Menus ----
+function startGame(fresh) {
+  S.audio.ensure();
+  if (fresh) {
+    clearSave();
+    S.saveData = defaultSave();
+    S.cash = CONFIG.startCash;
+    S.missions.index = 0; S.missions.step = 0; S.missions.done = false;
+    S.player.hp = CONFIG.playerHp;
+    S.player.x = -140; S.player.z = -40;
+    S.player.weapon = 'pistol'; S.player.ammo = { pistol: 24, smg: 0 };
+    S.wanted = 0;
+  } else {
+    S.cash = S.saveData.cash;
+    S.missions.index = Math.min(S.saveData.missionIndex || 0, 4);
+    S.missions.step = 0;
+    S.player.weapon = S.saveData.weapon || 'pistol';
+    S.player.ammo = { ...S.player.ammo, ...(S.saveData.ammo || {}) };
+  }
+  S.mode = 'playing';
+  S.hud.hideMenu();
+  S.hud.hideEnd();
+  S.hud.showPause(false);
+  S.missions.start(S);
 }
-requestAnimationFrame(loop);
+
+document.getElementById('btn-new').addEventListener('click', () => startGame(true));
+document.getElementById('btn-continue').addEventListener('click', () => startGame(false));
+document.getElementById('btn-resume').addEventListener('click', () => {
+  S.mode = 'playing';
+  S.hud.showPause(false);
+});
+document.getElementById('end-btn').addEventListener('click', () => respawn(S.mode));
+document.getElementById('menu').addEventListener('click', (e) => {
+  if (e.target.id === 'menu') S.audio.ensure();
+});
+// Continue button only makes sense with a save.
+if (!loadSave()) document.getElementById('btn-continue').classList.add('hidden');
+
+// ---- Shot mode: deterministic staged scene, no gameplay ----
+const params = new URLSearchParams(window.location.search);
+const shot = params.get('shot');
+if (shot && SHOT_NAMES.includes(shot)) {
+  S.audio.ensure = () => {};
+  S.mode = 'playing';
+  S.hud.hideMenu();
+  S.missions.index = 0;
+  applyShot(S, shot);
+}
+
+tick();

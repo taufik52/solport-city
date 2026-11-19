@@ -1,134 +1,145 @@
-// SOLPORT police: wanted stars, chasing cruisers, foot cops, busts, decay
-// and the Spray Shop that launders a hot car for cash.
-import * as THREE from 'three';
-import { makeCarMesh } from './vehicles.js';
-import { clamp, dist2d } from './utils.js';
+// SOLPORT — police.js (retry session, 19 Nov 2026)
+// Wanted 0-5: police cars spawn and chase/ram the player; on foot, cops
+// chase and "bust" on a proximity timer. Wanted decays when the player
+// stays out of sight; the Spray Shop clears it for cash.
 
-function makeCopMesh() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.85, 3, 8),
-    new THREE.MeshLambertMaterial({ color: 0x1a2f6e }));
-  body.position.y = 1.05; body.castShadow = true; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8),
-    new THREE.MeshLambertMaterial({ color: 0xd9a986 }));
-  head.position.y = 2.0; g.add(head);
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.16, 10),
-    new THREE.MeshLambertMaterial({ color: 0x0d1a3a }));
-  cap.position.y = 2.25; g.add(cap);
-  return g;
-}
+import * as THREE from 'three';
+import { createCarMesh } from './vehicles.js';
+import { makePersonMesh } from './pedestrians.js';
+import { clamp, angleLerp, dist2 } from './utils.js';
+import { CONFIG, SPRAY_SHOP } from './config.js';
 
 export class Police {
-  constructor(scene, city) {
-    this.scene = scene; this.city = city;
-    this.wanted = 0; this.cars = []; this.cops = [];
-    this.bustTimer = 0; this.decayTimer = 0; this.flashT = 0;
+  constructor(scene) {
+    this.scene = scene;
+    this.cars = [];   // {mesh, x, z, angle, speed}
+    this.cops = [];   // on-foot {mesh, x, z, angle}
+    this.bustTimer = 0;
+    this.decayTimer = 0;
+    this.sirenWanted = 0;
   }
-  addWanted(n, why) {
-    if (this.wanted >= 5) return;
-    this.wanted = clamp(this.wanted + n, 0, 5);
-    this.decayTimer = 12;
-    if (this.wanted > 0) this._syncCars();
-  }
-  _syncCars() {
-    const want = Math.min(this.wanted, 4);
+
+  wantedCount(wanted) { return Math.min(wanted, CONFIG.maxPoliceCars); }
+
+  // Keep spawned units matched to the wanted level.
+  sync(scene, wanted, px, pz) {
+    const want = this.wantedCount(wanted);
     while (this.cars.length < want) {
-      const mesh = makeCarMesh(0xf2f2f2, { police: true });
-      this.scene.add(mesh);
-      this.cars.push({ mesh, x: 0, z: 0, yaw: 0, speed: 0, spawned: false });
+      const mesh = createCarMesh(0x1a2a44);
+      // White doors stripe via a thin box.
+      const stripe = new THREE.Mesh(
+        new THREE.BoxGeometry(2.05, 0.25, 2.2),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 })
+      );
+      stripe.position.y = 0.85;
+      mesh.add(stripe);
+      const beacon = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.18, 0.4),
+        new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 2 })
+      );
+      beacon.position.y = 1.62;
+      mesh.add(beacon);
+      mesh.userData.beacon = beacon;
+      scene.add(mesh);
+      const a = Math.random() * Math.PI * 2;
+      this.cars.push({ mesh, x: px + Math.sin(a) * 60, z: pz + Math.cos(a) * 60, angle: a, speed: 0 });
+    }
+    while (this.cars.length > want) {
+      const c = this.cars.pop();
+      scene.remove(c.mesh);
+    }
+    // On-foot cops only when wanted >= 2 and the player is on foot.
+    const wantCops = wanted >= 2 ? Math.min(2, wanted - 1) : 0;
+    while (this.cops.length < wantCops) {
+      const mesh = makePersonMesh(0x1a2a44, 0xc98a5a);
+      scene.add(mesh);
+      const a = Math.random() * Math.PI * 2;
+      this.cops.push({ mesh, x: px + Math.sin(a) * 25, z: pz + Math.cos(a) * 25, angle: a });
+    }
+    while (this.cops.length > wantCops) {
+      const c = this.cops.pop();
+      scene.remove(c.mesh);
     }
   }
-  clearWanted(silent) {
-    this.wanted = 0; this.bustTimer = 0;
-    for (const c of this.cars) { this.scene.remove(c.mesh); }
-    this.cars = [];
-    for (const c of this.cops) { this.scene.remove(c.mesh); }
-    this.cops = [];
-    return silent;
-  }
-  setWanted(n) { this.wanted = clamp(n, 0, 5); this.decayTimer = 12; if (n > 0) this._syncCars(); else this.clearWanted(true); }
-  update(G, dt) {
-    if (this.wanted <= 0) { G.audio.setSiren(false); return; }
-    G.audio.setSiren(true); G.audio.sirenTick(dt);
-    this.flashT += dt;
-    const px = G.player.inCar ? G.player.car.x : G.player.x;
-    const pz = G.player.inCar ? G.player.car.z : G.player.z;
-    // Wanted decay: stay out of trouble and the heat fades, one star at a time.
-    this.decayTimer -= dt;
-    if (this.decayTimer <= 0) {
-      this.wanted--; this.decayTimer = 14;
-      if (this.wanted <= 0) { this.clearWanted(true); G.hud.banner('CLEAN', 'You lost the cops.'); return; }
-      G.hud.setObjective(G.missions.objectiveText());
-    }
-    // Cruisers: spawn off-screen, chase, ram. Light bars flash red/blue.
-    for (const car of this.cars) {
-      if (!car.spawned) {
-        const a = Math.random() * Math.PI * 2;
-        car.x = px + Math.sin(a) * 70; car.z = pz + Math.cos(a) * 70;
-        [car.x, car.z] = this.city.clampToWorld(car.x, car.z);
-        car.spawned = true;
-      }
-      const d = dist2d(car.x, car.z, px, pz);
-      // Screenshot staging: cruisers hold formation instead of chasing,
-      // so the staged chase stays in frame for the capture.
-      if (G.shotMode) {
-        // Hold formation with the player's car so the staged chase stays framed.
-        const hold = G.player.inCar ? Math.abs(G.player.car.speed) : 20;
-        car.x += Math.sin(car.yaw) * hold * dt; car.z += Math.cos(car.yaw) * hold * dt;
-        car.mesh.position.set(car.x, 0, car.z); car.mesh.rotation.y = car.yaw;
-        const bar = car.mesh.userData.lightBar;
-        if (bar) bar.children[0].material.color.setHex(Math.floor(this.flashT * 4) % 2 ? 0xff2222 : 0x551111);
-        if (bar) bar.children[1].material.color.setHex(Math.floor(this.flashT * 4) % 2 ? 0x111155 : 0x2244ff);
-        continue;
-      }
-      const wantYaw = Math.atan2(px - car.x, pz - car.z);
-      let dy = wantYaw - car.yaw;
-      while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
-      car.yaw += clamp(dy, -2.6 * dt, 2.6 * dt);
-      const sp = d > 30 ? 26 : 15 + this.wanted * 1.5;
-      car.x += Math.sin(car.yaw) * sp * dt; car.z += Math.cos(car.yaw) * sp * dt;
-      car.mesh.position.set(car.x, 0, car.z); car.mesh.rotation.y = car.yaw;
-      const bar = car.mesh.userData.lightBar;
-      if (bar) bar.children[0].material.color.setHex(Math.floor(this.flashT * 4) % 2 ? 0xff2222 : 0x551111);
-      if (bar) bar.children[1].material.color.setHex(Math.floor(this.flashT * 4) % 2 ? 0x111155 : 0x2244ff);
-      // Ram the player's car; bump the player on foot.
+
+  update(dt, S) {
+    const px = S.player.x, pz = S.player.z;
+    const driving = !S.player.onFoot && S.car;
+    const targetX = driving ? S.car.x : px;
+    const targetZ = driving ? S.car.z : pz;
+    let anyNear = false;
+
+    for (const c of this.cars) {
+      const d = dist2(c.x, c.z, targetX, targetZ);
+      const wantAngle = Math.atan2(targetX - c.x, targetZ - c.z);
+      c.angle = angleLerp(c.angle, wantAngle, Math.min(1, dt * 2.2));
+      const targetSpeed = d > 6 ? (S.wanted >= 4 ? 30 : 24) : 10;
+      c.speed += (targetSpeed - c.speed) * Math.min(1, dt * 1.5);
+      c.x += Math.sin(c.angle) * c.speed * dt;
+      c.z += Math.cos(c.angle) * c.speed * dt;
+      c.mesh.position.set(c.x, 0, c.z);
+      c.mesh.rotation.y = c.angle;
+      // Flashing beacon.
+      c.mesh.userData.beacon.material.emissive.setHex(Math.floor(performance.now() / 250) % 2 ? 0xff2222 : 0x2266ff);
+      // Ram: contact damages the player / car.
       if (d < 3.4) {
-        if (G.player.inCar) { G.player.car.speed *= 0.55; G.player.hp = Math.max(5, G.player.hp - 2); G.audio.crash(); }
-        else { G.player.hp = Math.max(5, G.player.hp - 6); G.player.x += Math.sin(car.yaw) * 2; G.player.z += Math.cos(car.yaw) * 2; }
+        anyNear = true;
+        if (driving) {
+          S.car.speed *= 0.55;
+          S.player.hp -= 6 * dt * 10 * 0.1;
+        } else {
+          S.player.hp -= 12 * dt;
+        }
+        S.audio.crash();
       }
+      if (d < 40) anyNear = true;
     }
-    // Foot cops: one steps out when the player is on foot and a cruiser is close.
-    if (!G.player.inCar && this.cops.length < Math.min(2, this.wanted)) {
-      const near = this.cars.find(c => c.spawned && dist2d(c.x, c.z, px, pz) < 16);
-      if (near) {
-        const mesh = makeCopMesh(); this.scene.add(mesh);
-        this.cops.push({ mesh, x: near.x, z: near.z, yaw: 0, hp: 60 });
-      }
-    }
-    for (const cop of this.cops) {
-      const d = dist2d(cop.x, cop.z, px, pz);
-      const wantYaw = Math.atan2(px - cop.x, pz - cop.z);
-      cop.yaw = wantYaw;
+
+    for (const c of this.cops) {
+      const d = dist2(c.x, c.z, px, pz);
+      const wantAngle = Math.atan2(px - c.x, pz - c.z);
+      c.angle = angleLerp(c.angle, wantAngle, Math.min(1, dt * 3));
       const sp = d > 3 ? 6.5 : 0;
-      cop.x += Math.sin(cop.yaw) * sp * dt; cop.z += Math.cos(cop.yaw) * sp * dt;
-      cop.mesh.position.set(cop.x, 0, cop.z); cop.mesh.rotation.y = cop.yaw;
-      if (d < 2.6) {
-        this.bustTimer += dt;
-        G.hud.setBust(this.bustTimer / 3);
-        if (this.bustTimer >= 3) { G.busted(); return; }
-      } else this.bustTimer = Math.max(0, this.bustTimer - dt * 2);
+      c.x += Math.sin(c.angle) * sp * dt;
+      c.z += Math.cos(c.angle) * sp * dt;
+      c.mesh.position.set(c.x, 0, c.z);
+      c.mesh.rotation.y = c.angle;
+      if (d < 3.2) anyNear = true;
     }
-    if (this.cops.length === 0) G.hud.setBust(0);
-    // Spray Shop: press E near it in a car to clear the wanted level for cash.
-    const s = this.city.spots.spray;
-    if (G.player.inCar && dist2d(px, pz, s.x, s.z) < 12) {
-      G.hud.setPrompt('E — Spray Shop: clear wanted for $150');
-      if (G.input.wasPressed('KeyE')) {
-        if (G.player.cash >= 150) {
-          G.player.cash -= 150; this.clearWanted(true);
-          G.audio.chime(); G.hud.banner('CLEAN RIDE', 'Fresh paint. The PD lost your trail.');
-        } else G.hud.banner('NO CASH', 'The Spray Shop wants $150. You are short.');
+
+    // Bust timer: on foot, a cop within 3.2m builds the bust.
+    if (!driving && this.cops.some((c) => dist2(c.x, c.z, px, pz) < 3.2)) {
+      this.bustTimer += dt;
+      if (this.bustTimer > 2.5) { S.busted = true; this.bustTimer = 0; }
+    } else {
+      this.bustTimer = Math.max(0, this.bustTimer - dt);
+    }
+
+    // Wanted decay: out of sight of every police unit for a while.
+    if (S.wanted > 0 && !anyNear) {
+      this.decayTimer += dt;
+      if (this.decayTimer > CONFIG.wantedDecayDelay) {
+        S.wanted -= 1;
+        this.decayTimer = 0;
+        S.hudFlash('Wanted level dropped');
       }
+    } else {
+      this.decayTimer = 0;
     }
+
+    // Spray shop clears wanted for cash.
+    if (S.wanted > 0 && dist2(px, pz, SPRAY_SHOP[0], SPRAY_SHOP[1]) < 8 && S.cash >= CONFIG.sprayCost) {
+      S.cash -= CONFIG.sprayCost;
+      S.wanted = 0;
+      S.hudFlash(`Spray Shop: wanted cleared (-$${CONFIG.sprayCost})`);
+      S.audio.chime();
+    }
+  }
+
+  clearAll(scene) {
+    for (const c of this.cars) scene.remove(c.mesh);
+    for (const c of this.cops) scene.remove(c.mesh);
+    this.cars = []; this.cops = [];
+    this.bustTimer = 0;
   }
 }

@@ -1,28 +1,111 @@
-// SOLPORT — shared tuning constants. Original fictional city, no Rockstar content.
-export const CFG = {
-  world: { half: 220, roadSpacing: 44, roadHalf: 5 },
-  player: { walkSpeed: 7, runSpeed: 11, hp: 100, punchDmg: 12, pistolDmg: 34, smgDmg: 18 },
-  car: { accel: 22, reverseAccel: 14, maxSpeed: 42, maxReverse: 12, steer: 1.9, grip: 6, brake: 30 },
-  traffic: { count: 14, speed: 9 },
-  peds: { count: 20, speed: 1.6 },
-  police: { maxCars: 4, chaseSpeed: 15, bustTime: 3, decayDelay: 12 },
-  wanted: { stealCar: 1, killPed: 1, killCop: 2, shootNearCop: 1, max: 5 },
-  economy: { taxiFare: 45, packageReward: 60, deliveryReward: 120, sprayCost: 150, hospitalLoss: 0.15 },
-  missions: [
-    { id: 1, name: 'First Pickup', intro: 'Mara Voss needs a package moved across town. Take the Comet parked outside and drive it to the Old Town drop-off. Keep it clean — the Solport PD is watching.', objective: 'Drive the package to the Old Town drop-off' },
-    { id: 2, name: 'Hot Wheels', intro: 'The Harbor Kings parked a Comet GT in the Northside lot. Take it. When the sirens start, lose them before you bring it to Mara.', objective: 'Steal the Comet GT, then lose the cops' },
-    { id: 3, name: 'Dockside Deal', intro: 'The Harbor Kings are moving product through Portside. Go in on foot, clear the dock, and grab the briefcase.', objective: 'Clear the dock and grab the briefcase' },
-    { id: 4, name: 'Getaway', intro: 'Three stars and a city full of roadblocks. Drive the briefcase to the Marina safehouse before the timer runs out.', objective: 'Reach the Marina safehouse in time' },
-    { id: 5, name: 'The Big One', intro: 'The Solport Reserve transport rolls down the coastal highway at dusk. Intercept it, take the haul, and deliver it to Mara. Four stars. No mistakes.', objective: 'Intercept the transport and deliver the haul' },
-  ],
-  districts: [
-    { name: 'Marina Bay', x: [-220, -130], z: [-220, 220], color: 0x2e7f8f },
-    { name: 'Old Town', x: [-130, -20], z: [-60, 120], color: 0xb08a4f },
-    { name: 'Northside', x: [-130, 60], z: [-220, -60], color: 0x6f9e5a },
-    { name: 'Portside', x: [60, 220], z: [60, 220], color: 0x8a6f5a },
-    { name: 'The Strip', x: [-20, 220], z: [-220, 60], color: 0x9e5a8a },
-  ],
-  sunPackages: 10,
-  startCash: 120,
+// SOLPORT — config.js (retry session, 19 Nov 2026)
+// Central tuning + world layout + mission data for the open-world crime game.
+// Nothing here references Rockstar/GTA: Solport, Jax Marlowe and Mara Voss
+// are original names created for this entry.
+
+export const CONFIG = {
+  title: 'SOLPORT',
+  saveKey: 'solport-save-v1',
+  // City layout: road grid, step 40, roads at -160..160 on both axes.
+  roadStep: 40,
+  roadHalf: 160,
+  roadWidth: 10,
+  blockSize: 30,
+  groundHalf: 200,
+  // Player
+  walkSpeed: 7,
+  runSpeed: 11,
+  playerHp: 100,
+  startCash: 250,
+  // Driving
+  carAccel: 22,
+  carBrake: 34,
+  carMaxSpeed: 38,
+  carReverseMax: 12,
+  carTurn: 1.9,
+  // Combat
+  pistolDamage: 34,
+  smgDamage: 20,
+  pistolRange: 70,
+  // Wanted
+  wantedDecayDelay: 6, // seconds out of sight before a star decays
+  sprayCost: 150,
+  hospitalCost: 200,
+  // World population
+  trafficCount: 14,
+  pedCount: 20,
+  maxPoliceCars: 5,
 };
-export const DISTRICT_NAMES = CFG.districts.map(d => d.name);
+
+export const DISTRICTS = [
+  { name: 'Marina Bay', x: -160, z: -40, note: 'waterfront, yachts, palms' },
+  { name: 'Old Town', x: -40, z: -120, note: 'narrow streets' },
+  { name: 'Northside', x: 80, z: -120, note: 'residential' },
+  { name: 'Portside', x: 120, z: 120, note: 'docks and warehouses' },
+  { name: 'The Strip', x: -40, z: 80, note: 'neon downtown' },
+];
+
+// Mission chain. Each mission is a list of steps; a step completes by
+// reaching its marker, killing its targets, or a timer, then advances.
+export const MISSIONS = [
+  {
+    id: 1,
+    name: 'First Pickup',
+    intro: "Mara Voss needs a package moved across town. No questions, Jax. Drive it like you own the road.",
+    steps: [
+      { kind: 'goto', label: 'Pick up the package at Marina Bay', pos: [-140, -60] },
+      { kind: 'goto', label: 'Deliver the package to Old Town', pos: [-60, -140], reward: 400 },
+    ],
+  },
+  {
+    id: 2,
+    name: 'Hot Wheels',
+    intro: 'A Comet GT is sitting in the Northside lot. Take it — and lose the cops before they box you in.',
+    steps: [
+      { kind: 'steal', label: 'Steal the Comet GT from the Northside lot', pos: [100, -100], reward: 300 },
+      { kind: 'clear', label: 'Lose the cops — reach the Spray Shop', pos: [-20, 100], reward: 350 },
+    ],
+  },
+  {
+    id: 3,
+    name: 'Dockside Deal',
+    intro: 'The Harbor Kings are moving product at Portside. Crash the deal, take the briefcase.',
+    steps: [
+      // One step that becomes a two-leg delivery once the gang is down:
+      // grab the briefcase at the docks, then bring it to Mara.
+      { kind: 'fight', label: 'Take out the Harbor Kings at the docks', pos: [140, 140], gang: 4, reward: 1100 },
+    ],
+  },
+  {
+    id: 4,
+    name: 'Getaway',
+    intro: 'Three stars, roadblocks everywhere. Get to the safehouse before the timer runs out.',
+    steps: [
+      { kind: 'timed', label: 'Reach the Northside safehouse in time', pos: [120, -140], seconds: 75, wanted: 3, reward: 800 },
+    ],
+  },
+  {
+    id: 5,
+    name: 'The Big One',
+    intro: 'The Solport Reserve transport is rolling down the coastal highway. Stop it, take the haul, bring it home.',
+    steps: [
+      { kind: 'intercept', label: 'Stop the Reserve transport on the highway', pos: [-160, 20], reward: 1000 },
+      { kind: 'goto', label: 'Deliver the haul to Mara Voss', pos: [-40, 60], reward: 1500 },
+    ],
+  },
+];
+
+export const SUN_PACKAGES = [
+  [-150, -20], [-100, 140], [-20, -160], [60, -60], [100, 60],
+  [140, -100], [-140, 100], [20, 140], [160, 20], [-60, 20],
+];
+
+export const SPRAY_SHOP = [-20, 100];
+export const HOSPITAL = [60, 160];
+export const MARA_HOME = [-40, 60];
+
+export const WEAPONS = {
+  fists: { name: 'Fists', damage: 15, range: 2.5, auto: false },
+  pistol: { name: 'Pistol', damage: 34, range: 70, auto: false, ammo: 24 },
+  smg: { name: 'SMG', damage: 20, range: 55, auto: true, ammo: 90 },
+};

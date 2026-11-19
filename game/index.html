@@ -1,90 +1,97 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SOLPORT — open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1a26; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #fff; }
-  #app, #app canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e16; font-family: Arial, Helvetica, sans-serif; }
+  #game { display: block; width: 100%; height: 100%; }
   .hidden { display: none !important; }
-  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-  .panel { background: rgba(8, 16, 26, 0.72); border: 1px solid rgba(255,255,255,0.18); border-radius: 10px; padding: 8px 12px; }
-  #topleft { position: absolute; top: 12px; left: 12px; min-width: 210px; }
-  #healthbar { height: 12px; background: #222; border-radius: 6px; overflow: hidden; margin: 6px 0 4px; }
-  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #27ae60, #2ecc71); }
-  #cash { font-size: 20px; font-weight: 700; }
-  #respect, #district { font-size: 12px; opacity: 0.85; }
-  #topright { position: absolute; top: 12px; right: 12px; text-align: right; }
-  #stars { font-size: 26px; letter-spacing: 3px; color: #ffd23f; text-shadow: 0 0 8px rgba(0,0,0,0.6); }
-  #stars.hot { color: #ff4444; animation: pulse 0.7s infinite alternate; }
-  @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
-  #timer { font-size: 18px; font-weight: 700; color: #ffd23f; margin-top: 4px; }
-  #bottomleft { position: absolute; left: 12px; bottom: 12px; max-width: 380px; font-size: 13px; }
-  #objective { font-weight: 600; }
-  #prompt { color: #ffd23f; margin-top: 4px; min-height: 16px; }
-  #controls { opacity: 0.7; font-size: 11px; margin-top: 6px; }
-  #minimap { position: absolute; right: 12px; bottom: 12px; width: 190px; height: 190px; border: 2px solid rgba(255,255,255,0.35); border-radius: 8px; background: #0d1a26; }
-  #speed { position: absolute; right: 214px; bottom: 16px; font-size: 26px; font-weight: 800; text-shadow: 0 2px 6px #000; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #ffd23c; background: #0a0e16; font-size: 22px; letter-spacing: 2px; z-index: 60; }
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; color: #fff; }
+  #top-left { position: absolute; top: 14px; left: 14px; }
+  #health-bar { width: 220px; height: 16px; background: rgba(0,0,0,0.55); border: 1px solid #fff3; border-radius: 8px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #2ecc71, #7be495); }
+  #health-text { font-size: 12px; margin-top: 3px; text-shadow: 0 1px 2px #000; }
+  #cash { font-size: 22px; font-weight: bold; margin-top: 6px; text-shadow: 0 1px 3px #000; color: #7be495; }
+  #respect { font-size: 12px; color: #ffd23c; text-shadow: 0 1px 2px #000; margin-top: 2px; }
+  #stars { position: absolute; top: 14px; right: 14px; font-size: 26px; letter-spacing: 4px; text-shadow: 0 1px 3px #000; }
+  #objective { position: absolute; left: 14px; bottom: 14px; max-width: 420px; font-size: 14px; background: rgba(0,0,0,0.55); padding: 10px 12px; border-radius: 8px; border-left: 4px solid #ffd23c; }
+  #objective b { color: #ffd23c; display: block; font-size: 11px; letter-spacing: 1px; margin-bottom: 3px; }
+  #weapon { position: absolute; left: 14px; bottom: 96px; font-size: 13px; background: rgba(0,0,0,0.55); padding: 6px 10px; border-radius: 6px; }
+  #speed { position: absolute; right: 16px; bottom: 200px; font-size: 30px; font-weight: bold; text-shadow: 0 2px 4px #000; }
+  #minimap { position: absolute; right: 14px; bottom: 14px; width: 170px; height: 170px; border: 2px solid rgba(255,255,255,0.35); border-radius: 8px; background: rgba(12,18,28,0.85); }
   #banner { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); text-align: center; }
-  #banner-title { font-size: 44px; font-weight: 900; letter-spacing: 4px; color: #ffd23f; text-shadow: 0 3px 12px #000; }
-  #banner-sub { font-size: 16px; text-shadow: 0 2px 6px #000; margin-top: 4px; }
-  #bust { position: absolute; top: 14%; left: 50%; transform: translateX(-50%); width: 260px; text-align: center; font-size: 13px; }
-  #bust-bar { height: 10px; background: #222; border-radius: 5px; overflow: hidden; margin-top: 4px; }
-  #bust-fill { height: 100%; width: 0%; background: #ff4444; }
-  #damage { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 120px rgba(255,0,0,0.55); opacity: 0; transition: opacity 0.15s; z-index: 6; }
-  #damage.show { opacity: 1; }
-  #menu { position: fixed; inset: 0; background: rgba(5, 10, 18, 0.82); display: flex; align-items: center; justify-content: center; z-index: 10; }
-  #menu-card { max-width: 620px; padding: 34px 40px; background: #101c2c; border: 1px solid #ffd23f55; border-radius: 16px; text-align: center; }
-  #menu-title { font-size: 52px; font-weight: 900; letter-spacing: 8px; color: #ffd23f; margin: 0 0 6px; }
-  #menu-body p { line-height: 1.55; font-size: 14px; }
-  #menu-body .dim { opacity: 0.7; font-size: 12px; }
-  .btn { pointer-events: auto; display: inline-block; margin: 8px 6px 0; padding: 12px 26px; font-size: 16px; font-weight: 700; color: #111; background: #ffd23f; border: none; border-radius: 10px; cursor: pointer; }
-  .btn.ghost { background: transparent; color: #ffd23f; border: 2px solid #ffd23f; }
-  .btn:hover { filter: brightness(1.1); }
+  #banner-title { font-size: 52px; font-weight: bold; letter-spacing: 6px; color: #ffd23c; text-shadow: 0 3px 0 #7a4a00, 0 6px 18px #000; }
+  #banner-sub { font-size: 17px; margin-top: 6px; text-shadow: 0 1px 3px #000; }
+  #flash { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); font-size: 15px; background: rgba(0,0,0,0.6); padding: 8px 14px; border-radius: 6px; color: #ffd23c; }
+  #controls-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-size: 11px; color: #ddd; background: rgba(0,0,0,0.45); padding: 5px 10px; border-radius: 6px; }
+  /* Screens */
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(6,10,18,0.82); color: #fff; z-index: 20; text-align: center; padding: 20px; }
+  .screen h1 { font-size: 64px; letter-spacing: 10px; color: #ffd23c; text-shadow: 0 4px 0 #7a4a00; }
+  .screen h2 { font-size: 15px; font-weight: normal; color: #9fc8e8; margin-top: 6px; letter-spacing: 2px; }
+  .screen p { max-width: 560px; margin: 18px 0; line-height: 1.55; font-size: 15px; color: #e8e8e8; }
+  .screen .controls { font-size: 13px; color: #bbb; line-height: 1.8; margin-bottom: 20px; }
+  .screen button { pointer-events: auto; cursor: pointer; font-size: 18px; font-weight: bold; letter-spacing: 1px; color: #111; background: #ffd23c; border: none; border-radius: 8px; padding: 14px 34px; margin: 6px; }
+  .screen button.secondary { background: #2a3342; color: #fff; }
+  .screen button:hover { filter: brightness(1.12); }
+  #end-title { font-size: 72px; color: #ff4444; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js" } }
 </script>
 </head>
 <body>
-<div id="app"></div>
+<canvas id="game"></canvas>
+<div id="loading">LOADING SOLPORT…</div>
+
 <div id="hud">
-  <div id="topleft" class="panel">
-    <div id="cash">$120</div>
-    <div id="healthbar"><div id="health-fill"></div></div>
-    <div id="health-text">100 HP</div>
-    <div id="respect">Respect 0</div>
-    <div id="district">Marina Bay</div>
+  <div id="top-left">
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <div id="health-text">HP 100</div>
+    <div id="cash">$250</div>
+    <div id="respect">Respect 0 • Packages 0/10</div>
   </div>
-  <div id="topright">
-    <div id="stars">☆☆☆☆☆</div>
-    <div id="timer"></div>
-  </div>
-  <div id="bottomleft" class="panel">
-    <div id="objective">Welcome to Solport.</div>
-    <div id="prompt"></div>
-    <div id="controls">WASD move/drive • Mouse camera • E car • Click shoot • F punch • Space handbrake • Esc pause • M mute</div>
-  </div>
-  <canvas id="minimap" width="190" height="190"></canvas>
-  <div id="speed"></div>
+  <div id="stars">☆☆☆☆☆</div>
+  <div id="controls-hint">WASD move/drive • E enter car • Click shoot • F punch • 1/2 weapons • M mute • Esc pause</div>
+  <div id="weapon">PISTOL • 24</div>
+  <div id="objective"><b>OBJECTIVE</b><span id="objective-text">Welcome to Solport.</span></div>
+  <div id="speed" class="hidden">0 mph</div>
+  <canvas id="minimap" width="170" height="170"></canvas>
   <div id="banner" class="hidden"><div id="banner-title"></div><div id="banner-sub"></div></div>
-  <div id="bust" class="hidden">BUSTED IN…<div id="bust-bar"><div id="bust-fill"></div></div></div>
+  <div id="flash" class="hidden"></div>
 </div>
-<div id="damage"></div>
-<div id="menu">
-  <div id="menu-card">
-    <h1 id="menu-title">SOLPORT</h1>
-    <div id="menu-body"></div>
-    <div>
-      <button class="btn" id="btn-start" data-action="start">New Game</button>
-      <button class="btn ghost" id="btn-continue" data-action="continue">Continue</button>
-      <button class="btn" id="btn-resume" data-action="resume">Resume</button>
-      <button class="btn ghost" id="btn-restart" data-action="restart">Restart</button>
-      <button class="btn ghost" id="btn-menu" data-action="menu">Main Menu</button>
-    </div>
+
+<div id="menu" class="screen">
+  <h1>SOLPORT</h1>
+  <h2>AN OPEN-WORLD CRIME GAME • A FICTIONAL COASTAL CITY</h2>
+  <p>Jax Marlowe is back in Solport, and fixer Mara Voss has work for him. Five missions against the Harbor Kings: pickups, a stolen Comet GT, a dockside shootout, a timed getaway, and the big Reserve transport job. Earn cash, dodge the law, collect all 10 sun-packages.</p>
+  <div class="controls">
+    On foot: WASD move, Shift run, drag mouse to look, Click shoot, F punch, E enter car<br>
+    Driving: W/S accelerate &amp; reverse, A/D steer, Space handbrake • 1 pistol / 2 SMG • M mute • Esc pause<br>
+    Progress saves to this browser automatically.
+  </div>
+  <div>
+    <button id="btn-new">NEW GAME</button>
+    <button id="btn-continue" class="secondary">CONTINUE</button>
   </div>
 </div>
+
+<div id="pause" class="screen hidden">
+  <h1 style="font-size:44px">PAUSED</h1>
+  <p>Solport waits for no one — except right now.</p>
+  <button id="btn-resume">RESUME</button>
+</div>
+
+<div id="end" class="screen hidden">
+  <h1 id="end-title">WASTED</h1>
+  <p id="end-sub"></p>
+  <button id="end-btn">GET BACK ON THE STREETS</button>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

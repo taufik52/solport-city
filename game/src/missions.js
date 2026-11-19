@@ -1,207 +1,236 @@
-// SOLPORT missions: 5 chained story missions with objectives, enemy gang
-// shooters, mission cars, timers and rewards. Original story, original names.
-import * as THREE from 'three';
-import { makeCarMesh } from './vehicles.js';
-import { CFG } from './config.js';
-import { dist2d, clamp } from './utils.js';
+// SOLPORT — missions.js (retry session, 19 Nov 2026)
+// The 5-mission chain for Jax Marlowe vs the Harbor Kings.
+// Steps: goto / steal / fight / clear / timed / intercept, then a reward
+// and the next mission's intro banner.
 
-function makeGangMesh() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.44, 0.85, 3, 8),
-    new THREE.MeshLambertMaterial({ color: 0x7a1f2b }));
-  body.position.y = 1.05; body.castShadow = true; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8),
-    new THREE.MeshLambertMaterial({ color: 0xc98a5a }));
-  head.position.y = 2.0; g.add(head);
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.7),
-    new THREE.MeshLambertMaterial({ color: 0x111111 }));
-  gun.position.set(0.3, 1.3, 0.4); g.add(gun);
-  return g;
-}
+import * as THREE from 'three';
+import { MISSIONS, MARA_HOME } from './config.js';
+import { dist2 } from './utils.js';
+import { makePersonMesh } from './pedestrians.js';
+import { createCarMesh, makePlayerCar } from './vehicles.js';
 
 export class Missions {
-  constructor(scene, city) {
-    this.scene = scene; this.city = city;
-    this.index = 0; // 0..4 active, 5 = all done
-    this.step = 0; this.timer = 0; this.enemies = [];
-    this.missionCar = null; this.transport = null; this.briefcase = null;
-    this.done = false;
+  constructor(scene) {
+    this.scene = scene;
+    this.index = 0;          // mission index into MISSIONS
+    this.step = 0;           // step index inside the mission
+    this.done = false;       // whole chain finished
+    this.timer = 0;          // timed-step countdown
+    this.gang = [];          // spawned gang members {mesh,x,z,hp}
+    this.transport = null;   // intercept target {mesh,x,z,angle,hp,speed}
+    this.comet = null;       // steal target car {mesh,x,z,angle}
+    this.briefcase = null;   // pickup marker mesh
+    this.objective = null;   // {x, z, label}
   }
-  get def() { return CFG.missions[this.index]; }
-  objectiveText() {
-    if (this.done) return 'All missions complete — free roam Solport. Taxi fares, sun-packages and deliveries still pay.';
-    const m = this.def; if (!m) return '';
-    const steps = {
-      0: ['Get in the Comet outside Mara\'s house', 'Steal the Comet GT from the Northside lot', 'Reach the Portside dock on foot', 'Get in a car — the clock is running', 'Intercept the Reserve transport on the coastal highway'],
-      1: ['Drive the package to the Old Town drop-off', 'Lose the cops, then bring the Comet GT to Mara', 'Clear the dock of Harbor Kings', 'Drive the briefcase to the Marina safehouse', 'Take the haul to Mara\'s house'],
-      2: ['Grab the briefcase', 'Drive the haul to Mara\'s house', '', '', ''],
-    };
-    return (steps[this.step] && steps[this.step][this.index]) || m.objective;
+
+  current() { return MISSIONS[this.index]; }
+  currentStep() { return this.current()?.steps[this.step]; }
+
+  label() {
+    if (this.done) return 'All missions complete — Solport is yours, Jax.';
+    const m = this.current();
+    const s = this.currentStep();
+    return `${m.name}: ${s.label}`;
   }
-  start(G, idx) {
-    this.index = idx; this.step = 0; this.timer = 0;
-    this.clearEnemies();
-    if (this.missionCar) {
-      this.scene.remove(this.missionCar.mesh);
-      if (G.parkedCars) G.parkedCars = G.parkedCars.filter(c => c !== this.missionCar);
-      this.missionCar = null;
-    }
+
+  start(S) {
+    this._setupStep(S);
+    S.banner(`${this.current().name}`, this.current().intro, 5);
+    S.audio.sting();
+  }
+
+  _clearStepObjects(S) {
+    for (const g of this.gang) this.scene.remove(g.mesh);
+    this.gang = [];
     if (this.transport) { this.scene.remove(this.transport.mesh); this.transport = null; }
-    const m = this.def;
-    G.hud.showMissionCard(m.name, m.intro);
-    G.audio.sting();
-    this._placeBeacon(G);
-    if (idx === 1) this._spawnMissionCar(G, G.city.spots.northLot.x, G.city.spots.northLot.z, 0xffd23f, 'Comet GT');
-    if (idx === 2) this._spawnGang(G);
-    if (idx === 3) { this.timer = 90; G.police.setWanted(3); }
-    if (idx === 4) this._spawnTransport(G);
-    if (idx === 0) this._spawnMissionCar(G, -168, 30, 0x27ae60, 'Comet');
+    if (this.comet) { this.scene.remove(this.comet.mesh); this.comet = null; }
+    if (this.briefcase) { this.scene.remove(this.briefcase); this.briefcase = null; }
   }
-  _placeBeacon(G) {
-    const targets = [
-      [-168, 30], [G.city.spots.northLot.x, G.city.spots.northLot.z],
-      [G.city.spots.dock.x, G.city.spots.dock.z], [G.city.spots.safehouse.x, G.city.spots.safehouse.z],
-      [G.city.spots.transport.x, G.city.spots.transport.z],
-    ];
-    const t = targets[this.index] || [0, 0];
-    G.city.setBeacon(t[0], t[1]);
-  }
-  _spawnMissionCar(G, x, z, color, name) {
-    const mesh = makeCarMesh(color); this.scene.add(mesh);
-    this.missionCar = { mesh, x, z, yaw: 0, speed: 0, color, name, isMission: true };
-    mesh.position.set(x, 0, z);
-    G.parkedCars.push(this.missionCar);
-  }
-  _spawnTransport(G) {
-    const mesh = makeCarMesh(0x2c3e50); this.scene.add(mesh);
-    this.transport = { mesh, x: -197, z: -180, yaw: 0, speed: 11, name: 'Reserve Transport', isMission: true };
-    mesh.position.set(-197, 0, -180);
-  }
-  _spawnGang(G) {
-    // Gang + briefcase staged ON the roads around the dock intersection,
-    // never inside a building block.
-    const gangSpots = [[144, 168], [164, 148], [148, 138], [172, 164]];
-    for (let i = 0; i < 4; i++) {
-      const mesh = makeGangMesh(); this.scene.add(mesh);
-      const [x, z] = gangSpots[i];
-      mesh.position.set(x, 0, z);
-      this.enemies.push({ mesh, x, z, yaw: 0, hp: 70, shootT: 1 + i * 0.4, dead: false });
+
+  _setupStep(S) {
+    this._clearStepObjects(S);
+    const s = this.currentStep();
+    if (!s) { this._finishMission(S); return; }
+    this.objective = { x: s.pos[0], z: s.pos[1], label: s.label };
+    S.city.beacon.visible = true;
+    S.city.beacon.position.set(s.pos[0], 0, s.pos[1]);
+
+    if (s.kind === 'fight') {
+      for (let i = 0; i < (s.gang || 3); i++) {
+        const mesh = makePersonMesh(0x8a2a2a, 0xd9a077);
+        mesh.position.set(s.pos[0] + (i - 1.5) * 4, 0, s.pos[1] + (i % 2 ? 4 : -4));
+        this.scene.add(mesh);
+        this.gang.push({ mesh, x: mesh.position.x, z: mesh.position.z, hp: 60 });
+      }
     }
-    // The briefcase, glowing on the road at the dock.
-    const bc = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.4),
-      new THREE.MeshBasicMaterial({ color: 0xffd23f }));
-    bc.position.set(154, 1.2, 172); this.scene.add(bc);
-    this.briefcase = { mesh: bc, x: 154, z: 172, taken: false };
+    if (s.kind === 'steal') {
+      const mesh = createCarMesh(0xe8c832, { sport: true });
+      mesh.position.set(s.pos[0], 0, s.pos[1]);
+      this.scene.add(mesh);
+      this.comet = { mesh, x: s.pos[0], z: s.pos[1], angle: 0 };
+    }
+    if (s.kind === 'timed') {
+      this.timer = s.seconds;
+      S.wanted = Math.max(S.wanted, s.wanted || 0);
+    }
+    if (s.kind === 'intercept') {
+      const mesh = createCarMesh(0xdddddd);
+      mesh.scale.set(1.2, 1.1, 1.4);
+      mesh.position.set(-170, 0, 20);
+      this.scene.add(mesh);
+      this.transport = { mesh, x: -170, z: 20, angle: Math.PI / 2, hp: 120, speed: 12 };
+    }
+    S.hudFlash(s.label);
   }
-  clearEnemies() {
-    for (const e of this.enemies) this.scene.remove(e.mesh);
-    this.enemies = [];
-    if (this.briefcase) { this.scene.remove(this.briefcase.mesh); this.briefcase = null; }
+
+  _finishStep(S) {
+    const s = this.currentStep();
+    if (s?.reward) {
+      S.cash += s.reward;
+      S.hudFlash(`+$${s.reward}`);
+    }
+    S.audio.sting();
+    this.step += 1;
+    if (this.step >= this.current().steps.length) this._finishMission(S);
+    else this._setupStep(S);
   }
-  completeMission(G) {
-    const rewards = [250, 400, 500, 700, 1500];
-    const r = rewards[this.index] || 200;
-    G.player.cash += r; G.player.respect += 20;
-    G.stats.missions++;
-    G.hud.banner('MISSION PASSED', this.def.name + ' — +' + '$' + r + '  •  Respect +20');
-    G.audio.sting(); G.city.hideBeacon();
-    this.clearEnemies();
-    this.index++;
-    if (this.index >= 5) {
+
+  _finishMission(S) {
+    S.saveData.respect += 20;
+    if (this.index >= MISSIONS.length - 1) {
       this.done = true;
-      G.hud.showMissionCard('SOLPORT IS YOURS', 'All five missions complete. Jax Marlowe runs this city now — free roam, collect the sun-packages, and keep the cash coming.');
-      G.hud.setObjective(this.objectiveText());
+      this.objective = null;
+      S.city.beacon.visible = false;
+      S.banner('SOLPORT IS YOURS', 'All five missions complete. Mara Voss owes you one, Jax.', 6);
+      S.audio.sting();
       return;
     }
-    this.start(G, this.index);
-    G.hud.setObjective(this.objectiveText());
+    this.index += 1;
+    this.step = 0;
+    S.banner(`${this.current().name}`, this.current().intro, 5);
+    this._setupStep(S);
   }
-  failMission(G, why) {
-    G.hud.banner('MISSION FAILED', why + ' — try again.');
-    G.audio.fail();
-    this.start(G, this.index);
+
+  // Called when the player presses E near a steal target.
+  trySteal(S) {
+    if (!this.comet) return false;
+    const d = dist2(S.player.x, S.player.z, this.comet.x, this.comet.z);
+    if (d > 6) return false;
+    // Swap the parked Comet in as the player's car.
+    if (S.car) this.scene.remove(S.car.mesh);
+    S.car = makePlayerCar(this.scene, this.comet.x, this.comet.z, 0xe8c832, true);
+    this.scene.remove(this.comet.mesh);
+    this.comet = null;
+    S.player.onFoot = false;
+    S.wanted = Math.max(S.wanted, 2);
+    S.hudFlash('Comet GT stolen — the cops are coming!');
+    S.audio.sting();
+    this._finishStep(S);
+    return true;
   }
-  update(G, dt) {
+
+  // Gang AI: seek the player and shoot (inaccurate), take damage via hits.
+  updateGang(dt, S) {
+    for (const g of this.gang) {
+      const d = dist2(g.x, g.z, S.player.x, S.player.z);
+      const a = Math.atan2(S.player.x - g.x, S.player.z - g.z);
+      if (d > 8) {
+        g.x += Math.sin(a) * 4.5 * dt;
+        g.z += Math.cos(a) * 4.5 * dt;
+      } else if (Math.random() < dt * 0.7) {
+        // Inaccurate return fire.
+        if (Math.random() < 0.35) S.player.hp -= 8;
+        S.audio.shot();
+      }
+      g.mesh.position.set(g.x, 0, g.z);
+      g.mesh.rotation.y = a;
+    }
+  }
+
+  update(dt, S) {
     if (this.done) return;
-    const px = G.player.inCar ? G.player.car.x : G.player.x;
-    const pz = G.player.inCar ? G.player.car.z : G.player.z;
-    // Transport drives the coastal highway; beacon follows it.
-    if (this.transport) {
-      this.transport.z += this.transport.speed * dt;
-      if (this.transport.z > 200) this.transport.z = -200;
-      this.transport.mesh.position.set(this.transport.x, 0, this.transport.z);
-      this.transport.mesh.rotation.y = 0;
-      G.city.setBeacon(this.transport.x, this.transport.z);
-      if (this.index === 4 && this.step === 0 && dist2d(px, pz, this.transport.x, this.transport.z) < 8) {
-        this.step = 1; G.police.setWanted(4);
-        G.hud.banner('HAUL SECURED', 'Four stars! Deliver the haul to Mara\'s house.');
-        G.city.setBeacon(G.city.spots.mara.x, G.city.spots.mara.z);
-        this.scene.remove(this.transport.mesh); this.transport = null;
-        G.player.cash += 0;
+    const s = this.currentStep();
+    if (!s) return;
+    const px = S.player.x, pz = S.player.z;
+
+    if (s.kind === 'fight') {
+      this.updateGang(dt, S);
+      if (this.gang.length === 0) {
+        // Drop the briefcase where the fight happened; pick it up, then
+        // deliver it to Mara. Two legs, one step.
+        const dock = [s.pos[0], s.pos[1]];
+        const b = new THREE.Mesh(
+          new THREE.BoxGeometry(1.2, 0.35, 0.9),
+          new THREE.MeshStandardMaterial({ color: 0x6a4a1a, roughness: 0.4, metalness: 0.5 })
+        );
+        b.position.set(dock[0], 0.5, dock[1]);
+        this.scene.add(b);
+        this.briefcase = b;
+        this._pickupAt = dock;
+        this._deliverAt = MARA_HOME;
+        s.kind = 'goto';
+        s.label = 'Grab the briefcase and bring it to Mara';
+        s.pos = MARA_HOME;
+        this.objective = { x: dock[0], z: dock[1], label: 'Grab the briefcase' };
+        S.city.beacon.position.set(dock[0], 0, dock[1]);
+        S.hudFlash('Briefcase dropped — grab it!');
       }
+      return;
     }
-    // Gang AI: close in and shoot with inaccuracy.
-    for (const e of this.enemies) {
-      if (e.dead) continue;
-      const d = dist2d(e.x, e.z, G.player.x, G.player.z);
-      const want = Math.atan2(G.player.x - e.x, G.player.z - e.z);
-      e.yaw = want;
-      if (d > 14) { e.x += Math.sin(want) * 4 * dt; e.z += Math.cos(want) * 4 * dt; }
-      e.mesh.position.set(e.x, 0, e.z); e.mesh.rotation.y = e.yaw;
-      e.shootT -= dt;
-      if (e.shootT <= 0 && d < 42 && !G.player.inCar) {
-        e.shootT = 1.1 + Math.random() * 0.7;
-        G.audio.enemyShot();
-        if (Math.random() < 0.38) {
-          G.player.hp -= 7 + Math.random() * 6;
-          G.hud.flashDamage();
-          if (G.player.hp <= 0) G.wasted();
-        }
-      }
-    }
-    // Briefcase pickup.
-    if (this.briefcase && !this.briefcase.taken && this.enemies.every(e => e.dead)) {
-      if (dist2d(px, pz, this.briefcase.x, this.briefcase.z) < 3) {
-        this.briefcase.taken = true; this.scene.remove(this.briefcase.mesh);
-        this.step = 2; G.hud.banner('BRIEFCASE SECURED', 'Take it to Mara\'s house.');
-        G.city.setBeacon(G.city.spots.mara.x, G.city.spots.mara.z);
-        G.player.weapon = 'smg'; G.player.ammo = 120;
-        G.hud.banner('WEAPON', 'Picked up an SMG — 120 rounds.');
-      }
-    }
-    // Per-mission step logic.
-    const S = this.city.spots;
-    if (this.index === 0) {
-      if (this.step === 0 && G.player.inCar && G.player.car === this.missionCar) {
-        this.step = 1; G.city.setBeacon(S.oldTownDrop.x, S.oldTownDrop.z);
-        G.hud.setObjective(this.objectiveText());
-      } else if (this.step === 1 && G.player.inCar && dist2d(px, pz, S.oldTownDrop.x, S.oldTownDrop.z) < 9) {
-        this.completeMission(G);
-      }
-    } else if (this.index === 1) {
-      if (this.step === 0 && G.player.inCar && G.player.car === this.missionCar) {
-        this.step = 1; G.police.addWanted(2, 'stole the Comet GT');
-        G.hud.banner('WANTED', 'The Comet GT is hot — lose the cops, then see Mara.');
-        G.city.hideBeacon();
-        G.hud.setObjective(this.objectiveText());
-      } else if (this.step === 1 && G.police.wanted === 0) {
-        this.step = 2; G.city.setBeacon(S.mara.x, S.mara.z);
-        G.hud.setObjective(this.objectiveText());
-      } else if (this.step === 2 && dist2d(px, pz, S.mara.x, S.mara.z) < 10) this.completeMission(G);
-    } else if (this.index === 2) {
-      if (this.step === 0 && this.enemies.every(e => e.dead) && !this.briefcase) { /* waiting for pickup handled above */ }
-      else if (this.step === 0 && this.enemies.every(e => e.dead) && this.briefcase && !this.briefcase.taken) {
-        G.city.setBeacon(this.briefcase.x, this.briefcase.z);
-      }
-      if (this.step === 2 && dist2d(px, pz, S.mara.x, S.mara.z) < 10) this.completeMission(G);
-    } else if (this.index === 3) {
+
+    if (s.kind === 'timed') {
       this.timer -= dt;
-      G.hud.setTimer(this.timer);
-      if (this.timer <= 0) { this.failMission(G, 'Out of time. The safehouse went cold.'); return; }
-      if (this.step === 0 && G.player.inCar) this.step = 1;
-      if (dist2d(px, pz, S.safehouse.x, S.safehouse.z) < 9) { G.hud.setTimer(0); this.completeMission(G); }
-    } else if (this.index === 4) {
-      if (this.step === 1 && dist2d(px, pz, S.mara.x, S.mara.z) < 10) this.completeMission(G);
+      if (this.timer <= 0) {
+        S.banner('TOO SLOW', 'The safehouse window closed. Try the run again.', 4);
+        S.audio.fail();
+        this._setupStep(S); // retry the same step
+        return;
+      }
+    }
+
+    if (s.kind === 'intercept' && this.transport) {
+      const t = this.transport;
+      // Transport loops east along the coastal highway (z = 20).
+      t.x += Math.sin(t.angle) * t.speed * dt;
+      t.z += Math.cos(t.angle) * t.speed * dt;
+      if (t.x > 175) { t.x = -175; }
+      t.mesh.position.set(t.x, 0, t.z);
+      t.mesh.rotation.y = t.angle;
+      this.objective = { x: t.x, z: t.z, label: 'Stop the Reserve transport' };
+      S.city.beacon.position.set(t.x, 0, t.z);
+      if (t.hp <= 0) {
+        S.cash += 0;
+        S.hudFlash('Transport stopped — grab the haul!');
+        this.scene.remove(t.mesh);
+        this.transport = null;
+        this._finishStep(S);
+      }
+      return;
+    }
+
+    if (s.kind === 'clear') {
+      // Objective: reach the spray shop while wanted; arrival clears it.
+      if (dist2(px, pz, s.pos[0], s.pos[1]) < 8) {
+        S.wanted = 0;
+        this._finishStep(S);
+      }
+      return;
+    }
+
+    if (s.kind === 'goto') {
+      // Briefcase pickup leg (mission 3 second half).
+      if (this._pickupAt) {
+        if (dist2(px, pz, this._pickupAt[0], this._pickupAt[1]) < 4) {
+          if (this.briefcase) { this.scene.remove(this.briefcase); this.briefcase = null; }
+          this._pickupAt = null;
+          this.objective = { x: this._deliverAt[0], z: this._deliverAt[1], label: 'Bring the briefcase to Mara' };
+          S.city.beacon.position.set(this._deliverAt[0], 0, this._deliverAt[1]);
+          S.audio.chime();
+        }
+        return;
+      }
+      if (dist2(px, pz, s.pos[0], s.pos[1]) < 6) this._finishStep(S);
+      return;
     }
   }
 }

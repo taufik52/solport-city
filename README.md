@@ -7,7 +7,8 @@
 An original open-world crime game for make.fun **gta6-01 "Make GTA 6"**, built
 in a desktop browser from static files — no network, no Rockstar content.
 Everything (city, characters, story, art, sound) is original and made for
-this entry.
+this entry. (Rebuilt fresh in the 19 Nov 2026 retry session after the first
+submission attempt lost its recording receipt.)
 
 **Solport** is a sun-soaked fictional coastal city. Jax Marlowe, a driver
 pulled back in by fixer **Mara Voss**, runs five story missions against the
@@ -19,9 +20,9 @@ Portside and The Strip.
 Serve `game/` with any static server (`node serve.ts`, then
 http://localhost:8080) and open it in a desktop browser.
 
-- **WASD** move / drive · **Mouse** orbit camera · **Shift** run
+- **WASD** move / drive · **Mouse drag** orbit camera · **Shift** run
 - **E** enter / exit car · **Click** shoot · **F** punch · **Space** handbrake
-- **Esc / P** pause · **M** mute
+- **1 / 2** pistol / SMG · **Esc / P** pause · **M** mute
 
 ## Systems
 

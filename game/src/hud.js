@@ -1,119 +1,139 @@
-// SOLPORT HUD: DOM overlay — health/cash, wanted stars, minimap canvas,
-// objective + prompts, speedometer, banners, menus (start / pause / end).
-import { fmtCash, fmtTime } from './utils.js';
+// SOLPORT — hud.js (retry session, 19 Nov 2026)
+// DOM HUD: health + cash, wanted stars, minimap canvas (roads, player
+// arrow, mission marker, police blips, packages), objective line,
+// speedometer, centre banners, start/pause/wasted/busted screens.
+
+import { CONFIG } from './config.js';
 
 export class HUD {
-  constructor(G) {
-    this.G = G;
-    const el = (id) => document.getElementById(id);
-    this.healthFill = el('health-fill'); this.healthText = el('health-text');
-    this.cashText = el('cash'); this.respectText = el('respect');
-    this.starsEl = el('stars'); this.districtEl = el('district');
-    this.objectiveEl = el('objective'); this.promptEl = el('prompt');
-    this.speedEl = el('speed'); this.bannerEl = el('banner'); this.bannerTitle = el('banner-title'); this.bannerSub = el('banner-sub');
-    this.timerEl = el('timer'); this.bustEl = el('bust'); this.bustFill = el('bust-fill');
-    this.menuEl = el('menu'); this.menuTitle = el('menu-title'); this.menuBody = el('menu-body');
-    this.map = el('minimap'); this.mapCtx = this.map.getContext('2d');
-    this.damageEl = el('damage');
-    this._bannerT = 0; this._damageT = 0;
-    // Menu buttons are bound once, by data-action, in _bindMenuButtons below.
-    this._bindMenuButtons();
+  constructor() {
+    this.el = {
+      health: document.getElementById('health-fill'),
+      healthText: document.getElementById('health-text'),
+      cash: document.getElementById('cash'),
+      stars: document.getElementById('stars'),
+      objective: document.getElementById('objective-text'),
+      speed: document.getElementById('speed'),
+      banner: document.getElementById('banner'),
+      bannerTitle: document.getElementById('banner-title'),
+      bannerSub: document.getElementById('banner-sub'),
+      flash: document.getElementById('flash'),
+      menu: document.getElementById('menu'),
+      pause: document.getElementById('pause'),
+      end: document.getElementById('end'),
+      endTitle: document.getElementById('end-title'),
+      endSub: document.getElementById('end-sub'),
+      minimap: document.getElementById('minimap'),
+      respect: document.getElementById('respect'),
+      weapon: document.getElementById('weapon'),
+    };
+    this.mapCtx = this.el.minimap.getContext('2d');
+    this._bannerTimer = 0;
+    this._flashTimer = 0;
   }
-  _bindMenuButtons() {
-    // Buttons inside the menu share ids across states; rebind by data-action.
-    document.querySelectorAll('[data-action]').forEach(b => {
-      b.addEventListener('click', () => {
-        const a = b.dataset.action;
-        if (a === 'start') this.G.startGame(false);
-        if (a === 'continue') this.G.startGame(true);
-        if (a === 'resume') this.G.resumeGame();
-        if (a === 'restart') this.G.restartGame();
-        if (a === 'menu') this.G.toMenu();
-      });
-    });
+
+  showMenu() {
+    this.el.menu.classList.remove('hidden');
+    this.el.pause.classList.add('hidden');
+    this.el.end.classList.add('hidden');
   }
-  showMenu(kind, title, bodyHtml) {
-    this.menuEl.classList.remove('hidden');
-    this.menuTitle.textContent = title;
-    this.menuBody.innerHTML = bodyHtml;
-    this.menuEl.dataset.kind = kind;
-    // Show only the buttons that fit this menu state.
-    document.querySelectorAll('[data-action]').forEach(b => {
-      const a = b.dataset.action;
-      b.style.display = '';
-      if (kind === 'start' && (a === 'resume' || a === 'restart' || a === 'menu')) b.style.display = 'none';
-      if (kind === 'pause' && (a === 'start' || a === 'continue' || a === 'restart')) b.style.display = 'none';
-      if (kind === 'end' && (a === 'start' || a === 'resume' || a === 'menu')) b.style.display = 'none';
-      if (kind === 'start' && a === 'continue' && !this.G.hasSave) b.style.display = 'none';
-    });
+  hideMenu() { this.el.menu.classList.add('hidden'); }
+  showPause(show) { this.el.pause.classList.toggle('hidden', !show); }
+  showEnd(title, sub) {
+    this.el.endTitle.textContent = title;
+    this.el.endSub.textContent = sub;
+    this.el.end.classList.remove('hidden');
   }
-  hideMenu() { this.menuEl.classList.add('hidden'); }
-  showMissionCard(name, intro) {
-    this.banner(name, intro);
+  hideEnd() { this.el.end.classList.add('hidden'); }
+
+  banner(title, sub, seconds = 4) {
+    this.el.bannerTitle.textContent = title;
+    this.el.bannerSub.textContent = sub || '';
+    this.el.banner.classList.remove('hidden');
+    this._bannerTimer = seconds;
   }
-  banner(title, sub) {
-    this.bannerTitle.textContent = title;
-    this.bannerSub.textContent = sub || '';
-    this.bannerEl.classList.remove('hidden');
-    this.bannerEl.classList.add('show');
-    this._bannerT = 4;
+
+  flash(text) {
+    this.el.flash.textContent = text;
+    this.el.flash.classList.remove('hidden');
+    this._flashTimer = 2.5;
   }
-  flashDamage() {
-    this.damageEl.classList.add('show');
-    this._damageT = 0.25;
+
+  update(dt, S) {
+    if (this._bannerTimer > 0) {
+      this._bannerTimer -= dt;
+      if (this._bannerTimer <= 0) this.el.banner.classList.add('hidden');
+    }
+    if (this._flashTimer > 0) {
+      this._flashTimer -= dt;
+      if (this._flashTimer <= 0) this.el.flash.classList.add('hidden');
+    }
+    const hp = Math.max(0, Math.round(S.player.hp));
+    this.el.health.style.width = `${hp}%`;
+    this.el.healthText.textContent = `HP ${hp}`;
+    this.el.cash.textContent = `$${S.cash.toLocaleString()}`;
+    this.el.respect.textContent = `Respect ${S.saveData.respect}  •  Packages ${S.saveData.packages.length}/10`;
+    this.el.stars.textContent = '★'.repeat(S.wanted) + '☆'.repeat(5 - S.wanted);
+    this.el.stars.style.color = S.wanted > 0 ? '#ff4444' : '#888888';
+    this.el.objective.textContent = S.missions.label();
+    const wname = S.player.weapon === 'fists' ? 'Fists' : S.player.weapon.toUpperCase();
+    const ammo = S.player.weapon === 'fists' ? '∞' : (S.player.ammo[S.player.weapon] || 0);
+    this.el.weapon.textContent = `${wname} • ${ammo}`;
+    if (S.car && !S.player.onFoot) {
+      this.el.speed.classList.remove('hidden');
+      this.el.speed.textContent = `${Math.round(Math.abs(S.car.speed) * 3.2)} mph`;
+    } else {
+      this.el.speed.classList.add('hidden');
+    }
+    this._drawMinimap(S);
   }
-  setObjective(text) { this.objectiveEl.textContent = text; }
-  setPrompt(text) { this.promptEl.textContent = text || ''; }
-  setTimer(s) { this.timerEl.textContent = s > 0 ? '⏱ ' + fmtTime(s) : ''; }
-  setBust(frac) {
-    if (frac > 0) { this.bustEl.classList.remove('hidden'); this.bustFill.style.width = Math.round(frac * 100) + '%'; }
-    else this.bustEl.classList.add('hidden');
-  }
-  update(dt) {
-    const G = this.G, P = G.player;
-    if (this._bannerT > 0) { this._bannerT -= dt; if (this._bannerT <= 0) this.bannerEl.classList.add('hidden'); }
-    if (this._damageT > 0) { this._damageT -= dt; if (this._damageT <= 0) this.damageEl.classList.remove('show'); }
-    this.healthFill.style.width = Math.max(0, P.hp) + '%';
-    this.healthText.textContent = Math.ceil(Math.max(0, P.hp)) + ' HP';
-    this.cashText.textContent = fmtCash(P.cash);
-    this.respectText.textContent = 'Respect ' + P.respect;
-    this.starsEl.textContent = '★'.repeat(G.police.wanted) + '☆'.repeat(5 - G.police.wanted);
-    this.starsEl.classList.toggle('hot', G.police.wanted > 0);
-    this.districtEl.textContent = G.city.districtAt(P.x, P.z);
-    this.speedEl.textContent = P.inCar ? Math.round(Math.abs(P.car.speed) * 2.4) + ' km/h' : '';
-    this.drawMinimap();
-  }
-  drawMinimap() {
-    const G = this.G, c = this.mapCtx, W = this.map.width, H = this.map.height;
-    const scale = W / 480;
-    const toX = (x) => W / 2 + x * scale, toY = (z) => H / 2 + z * scale;
-    c.fillStyle = '#0d1a26'; c.fillRect(0, 0, W, H);
-    // Water west.
-    c.fillStyle = '#1e6f8f'; c.fillRect(0, 0, toX(-200), H);
+
+  _drawMinimap(S) {
+    const ctx = this.mapCtx;
+    const W = 170, H = 170;
+    const scale = W / 420; // world -210..210 -> 0..170
+    const toX = (x) => (x + 210) * scale;
+    const toY = (z) => (z + 210) * scale;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(12,18,28,0.85)';
+    ctx.fillRect(0, 0, W, H);
+    // Water west edge.
+    ctx.fillStyle = '#2a7fa8';
+    ctx.fillRect(0, 0, 8, H);
     // Roads.
-    c.strokeStyle = '#3a3f46'; c.lineWidth = 3;
-    for (let v = -198; v <= 198; v += 44) {
-      c.beginPath(); c.moveTo(toX(v), 0); c.lineTo(toX(v), H); c.stroke();
-      c.beginPath(); c.moveTo(0, toY(v)); c.lineTo(W, toY(v)); c.stroke();
+    ctx.strokeStyle = '#555c66';
+    ctx.lineWidth = 3;
+    for (let v = -160; v <= 160; v += 40) {
+      ctx.beginPath(); ctx.moveTo(toX(-200), toY(v)); ctx.lineTo(toX(200), toY(v)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(toX(v), toY(-200)); ctx.lineTo(toX(v), toY(200)); ctx.stroke();
+    }
+    // Sun-packages.
+    ctx.fillStyle = '#ffd23c';
+    for (const [x, z] of S.packageSpots) {
+      if (S.saveData.packages.includes(`${x},${z}`)) continue;
+      ctx.beginPath(); ctx.arc(toX(x), toY(z), 2.5, 0, Math.PI * 2); ctx.fill();
     }
     // Mission marker.
-    if (G.city.beacon.visible) {
-      const bx = G.city.beacon.position.x, bz = G.city.beacon.position.z;
-      c.fillStyle = '#ffd23f';
-      c.beginPath(); c.arc(toX(bx), toY(bz), 5, 0, Math.PI * 2); c.fill();
-      c.strokeStyle = '#ffd23f'; c.beginPath(); c.arc(toX(bx), toY(bz), 9, 0, Math.PI * 2); c.stroke();
+    if (S.missions.objective) {
+      const o = S.missions.objective;
+      ctx.fillStyle = '#ffc93c';
+      ctx.beginPath(); ctx.arc(toX(o.x), toY(o.z), 5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffc93c'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(toX(o.x), toY(o.z), 8, 0, Math.PI * 2); ctx.stroke();
     }
-    // Taxi fare.
-    if (G.taxi && !G.taxi.active) { c.fillStyle = '#2ecc71'; c.fillRect(toX(G.taxi.x) - 3, toY(G.taxi.z) - 3, 6, 6); }
-    if (G.taxi && G.taxi.active) { c.fillStyle = '#2ecc71'; c.beginPath(); c.arc(toX(G.taxi.dx), toY(G.taxi.dz), 5, 0, Math.PI * 2); c.fill(); }
     // Police blips.
-    c.fillStyle = '#ff4444';
-    for (const car of G.police.cars) { c.beginPath(); c.arc(toX(car.x), toY(car.z), 3.5, 0, Math.PI * 2); c.fill(); }
+    ctx.fillStyle = '#ff4444';
+    for (const c of S.police.cars) {
+      ctx.beginPath(); ctx.arc(toX(c.x), toY(c.z), 3, 0, Math.PI * 2); ctx.fill();
+    }
     // Player arrow.
-    const px = toX(G.player.x), pz = toY(G.player.z);
-    c.save(); c.translate(px, pz); c.rotate(-G.player.yaw + Math.PI);
-    c.fillStyle = '#ffffff';
-    c.beginPath(); c.moveTo(0, -7); c.lineTo(5, 6); c.lineTo(-5, 6); c.closePath(); c.fill();
-    c.restore();
+    const px = toX(S.player.x), py = toY(S.player.z);
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(-S.player.angle + Math.PI);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(4, 5); ctx.lineTo(-4, 5); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    void CONFIG;
   }
 }
