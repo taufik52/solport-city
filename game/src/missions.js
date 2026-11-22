@@ -1,7 +1,13 @@
-// SOLPORT — missions.js (retry session, 19 Nov 2026)
-// The 5-mission chain for Jax Marlowe vs the Harbor Kings.
-// Steps: goto / steal / fight / clear / timed / intercept, then a reward
-// and the next mission's intro banner.
+// SOLPORT — missions.js (resubmit rewrite, 22 Nov 2026)
+// Data-driven mission engine for Jax Marlowe vs the Harbor Kings.
+//
+// Design: missions are declarative data (see config.js MISSIONS); this file
+// is a small runner, not five hand-written scripts. A handler registry maps
+// each step kind to a behaviour object {enter, tick, leave}, and the runner
+// keeps one per-step context object that tracks sub-phases (a fight step,
+// for example, flows seek -> combat -> fetch -> deliver without ever
+// rewriting the step data itself). The runner only ever talks to the shared
+// state S through a narrow surface: beacon, cash, wanted, banners, audio.
 
 import * as THREE from 'three';
 import { MISSIONS, MARA_HOME } from './config.js';
@@ -9,18 +15,189 @@ import { dist2 } from './utils.js';
 import { makePersonMesh } from './pedestrians.js';
 import { createCarMesh, makePlayerCar } from './vehicles.js';
 
+// --- Step handlers -------------------------------------------------------
+// Every handler gets (S, run, step, dt) and may read/write run.ctx, the
+// per-step scratch object. enter() stages the step's actors and beacon;
+// tick() returns 'done' when the step completes, 'stay' otherwise.
+
+function pointBeacon(S, x, z, label) {
+  S.city.beacon.visible = true;
+  S.city.beacon.position.set(x, 0, z);
+}
+
+function arriveAt(px, pz, x, z, radius) {
+  return dist2(px, pz, x, z) < radius;
+}
+
+const HANDLERS = {
+  goto: {
+    enter(S, run, step) {
+      run.ctx.target = { x: step.pos[0], z: step.pos[1] };
+      pointBeacon(S, step.pos[0], step.pos[1], step.label);
+    },
+    tick(S, run, step) {
+      const t = run.ctx.target;
+      return arriveAt(S.player.x, S.player.z, t.x, t.z, 6) ? 'done' : 'stay';
+    },
+  },
+
+  steal: {
+    enter(S, run, step) {
+      const mesh = createCarMesh(0xe8c832, { sport: true });
+      mesh.position.set(step.pos[0], 0, step.pos[1]);
+      S.scene.add(mesh);
+      run.comet = { mesh, x: step.pos[0], z: step.pos[1], angle: 0 };
+      pointBeacon(S, step.pos[0], step.pos[1], step.label);
+    },
+    tick() { return 'stay'; }, // completes via trySteal() when the player presses E
+    leave(S, run) {
+      if (run.comet) { S.scene.remove(run.comet.mesh); run.comet = null; }
+    },
+  },
+
+  fight: {
+    enter(S, run, step) {
+      run.ctx.phase = 'combat';
+      run.ctx.dock = { x: step.pos[0], z: step.pos[1] };
+      const count = step.gang || 3;
+      for (let i = 0; i < count; i++) {
+        const mesh = makePersonMesh(0x8a2a2a, 0xd9a077);
+        const gx = step.pos[0] + (i - 1.5) * 4;
+        const gz = step.pos[1] + (i % 2 ? 4 : -4);
+        mesh.position.set(gx, 0, gz);
+        S.scene.add(mesh);
+        run.gang.push({ mesh, x: gx, z: gz, hp: 60 });
+      }
+      pointBeacon(S, step.pos[0], step.pos[1], step.label);
+    },
+    tick(S, run, step, dt) {
+      if (run.ctx.phase === 'combat') {
+        run.updateGang(dt, S);
+        if (run.gang.length === 0) {
+          // Gang down: the briefcase drops at the dock, then goes to Mara.
+          const dock = run.ctx.dock;
+          const box = new THREE.Mesh(
+            new THREE.BoxGeometry(1.2, 0.35, 0.9),
+            new THREE.MeshStandardMaterial({ color: 0x6a4a1a, roughness: 0.4, metalness: 0.5 })
+          );
+          box.position.set(dock.x, 0.5, dock.z);
+          S.scene.add(box);
+          run.briefcase = box;
+          run.ctx.phase = 'fetch';
+          run.ctx.pickup = dock;
+          run.ctx.deliver = { x: MARA_HOME[0], z: MARA_HOME[1] };
+          run.objective = { x: dock.x, z: dock.z, label: 'Grab the briefcase' };
+          pointBeacon(S, dock.x, dock.z, 'Grab the briefcase');
+          S.hudFlash('Briefcase dropped — grab it!');
+        }
+        return 'stay';
+      }
+      if (run.ctx.phase === 'fetch') {
+        const p = run.ctx.pickup;
+        if (arriveAt(S.player.x, S.player.z, p.x, p.z, 4)) {
+          if (run.briefcase) { S.scene.remove(run.briefcase); run.briefcase = null; }
+          run.ctx.phase = 'deliver';
+          const d = run.ctx.deliver;
+          run.objective = { x: d.x, z: d.z, label: 'Bring the briefcase to Mara' };
+          pointBeacon(S, d.x, d.z, 'Bring the briefcase to Mara');
+          S.audio.chime();
+        }
+        return 'stay';
+      }
+      // 'deliver' phase: arrive at Mara's with the case.
+      const d = run.ctx.deliver;
+      return arriveAt(S.player.x, S.player.z, d.x, d.z, 6) ? 'done' : 'stay';
+    },
+    leave(S, run) {
+      for (const g of run.gang) S.scene.remove(g.mesh);
+      run.gang = [];
+      if (run.briefcase) { S.scene.remove(run.briefcase); run.briefcase = null; }
+    },
+  },
+
+  timed: {
+    enter(S, run, step) {
+      run.ctx.left = step.seconds;
+      run.timer = step.seconds;
+      S.wanted = Math.max(S.wanted, step.wanted || 0);
+      pointBeacon(S, step.pos[0], step.pos[1], step.label);
+    },
+    tick(S, run, step, dt) {
+      run.ctx.left -= dt;
+      run.timer = Math.max(0, run.ctx.left);
+      if (run.ctx.left <= 0) {
+        S.banner('TOO SLOW', 'The safehouse window closed. Try the run again.', 4);
+        S.audio.fail();
+        run.restartStep(S); // retry the same step, timer reset
+        return 'stay';
+      }
+      return arriveAt(S.player.x, S.player.z, step.pos[0], step.pos[1], 6) ? 'done' : 'stay';
+    },
+  },
+
+  clear: {
+    enter(S, run, step) {
+      pointBeacon(S, step.pos[0], step.pos[1], step.label);
+    },
+    tick(S, run, step) {
+      if (arriveAt(S.player.x, S.player.z, step.pos[0], step.pos[1], 8)) {
+        S.wanted = 0;
+        return 'done';
+      }
+      return 'stay';
+    },
+  },
+
+  intercept: {
+    enter(S, run, step) {
+      const mesh = createCarMesh(0xdddddd);
+      mesh.scale.set(1.2, 1.1, 1.4);
+      mesh.position.set(-170, 0, 20);
+      S.scene.add(mesh);
+      run.transport = { mesh, x: -170, z: 20, angle: Math.PI / 2, hp: 120, speed: 12 };
+      pointBeacon(S, -170, 20, step.label);
+    },
+    tick(S, run, step, dt) {
+      const t = run.transport;
+      if (!t) return 'stay';
+      // The transport loops east along the coastal highway (z = 20).
+      t.x += Math.sin(t.angle) * t.speed * dt;
+      t.z += Math.cos(t.angle) * t.speed * dt;
+      if (t.x > 175) t.x = -175;
+      t.mesh.position.set(t.x, 0, t.z);
+      t.mesh.rotation.y = t.angle;
+      run.objective = { x: t.x, z: t.z, label: 'Stop the Reserve transport' };
+      S.city.beacon.position.set(t.x, 0, t.z);
+      if (t.hp <= 0) {
+        S.cash += 250;
+        S.hudFlash('Transport stopped — haul secured +$250!');
+        S.scene.remove(t.mesh);
+        run.transport = null;
+        return 'done';
+      }
+      return 'stay';
+    },
+    leave(S, run) {
+      if (run.transport) { S.scene.remove(run.transport.mesh); run.transport = null; }
+    },
+  },
+};
+
+// --- Runner ---------------------------------------------------------------
+
 export class Missions {
   constructor(scene) {
     this.scene = scene;
     this.index = 0;          // mission index into MISSIONS
     this.step = 0;           // step index inside the mission
     this.done = false;       // whole chain finished
-    this.timer = 0;          // timed-step countdown
+    this.timer = 0;          // timed-step countdown (mirrored for the HUD)
     this.gang = [];          // spawned gang members {mesh,x,z,hp}
     this.transport = null;   // intercept target {mesh,x,z,angle,hp,speed}
     this.comet = null;       // steal target car {mesh,x,z,angle}
     this.briefcase = null;   // pickup marker mesh
     this.objective = null;   // {x, z, label}
+    this.ctx = {};           // per-step scratch (phases, countdowns, targets)
   }
 
   current() { return MISSIONS[this.index]; }
@@ -30,16 +207,44 @@ export class Missions {
     if (this.done) return 'All missions complete — Solport is yours, Jax.';
     const m = this.current();
     const s = this.currentStep();
-    return `${m.name}: ${s.label}`;
+    const p = this.progress();
+    return `M${p.mission}/${p.missions} · ${m.name}: ${s.label}`;
+  }
+
+  // Chain progress for the HUD: how many steps are done out of the whole
+  // five-mission chain, and which mission Jax is on.
+  progress() {
+    const total = MISSIONS.reduce((n, m) => n + m.steps.length, 0);
+    const banked = MISSIONS.slice(0, this.index).reduce((n, m) => n + m.steps.length, 0);
+    return { done: banked + this.step, total, mission: this.index + 1, missions: MISSIONS.length };
+  }
+
+  // Fresh chain from mission 1 (used by New Game).
+  reset() {
+    this.index = 0;
+    this.step = 0;
+    this.done = false;
+    this.timer = 0;
+    this.ctx = {};
+  }
+
+  // Resume a saved chain at a mission (used by Continue).
+  restore(index) {
+    this.reset();
+    this.index = Math.min(index || 0, MISSIONS.length - 1);
   }
 
   start(S) {
-    this._setupStep(S);
+    this._enterStep(S);
     S.banner(`${this.current().name}`, this.current().intro, 5);
     S.audio.sting();
   }
 
-  _clearStepObjects(S) {
+  _handler(step) {
+    return HANDLERS[step?.kind] || HANDLERS.goto;
+  }
+
+  _clearActors() {
     for (const g of this.gang) this.scene.remove(g.mesh);
     this.gang = [];
     if (this.transport) { this.scene.remove(this.transport.mesh); this.transport = null; }
@@ -47,52 +252,37 @@ export class Missions {
     if (this.briefcase) { this.scene.remove(this.briefcase); this.briefcase = null; }
   }
 
-  _setupStep(S) {
-    this._clearStepObjects(S);
-    const s = this.currentStep();
-    if (!s) { this._finishMission(S); return; }
-    this.objective = { x: s.pos[0], z: s.pos[1], label: s.label };
-    S.city.beacon.visible = true;
-    S.city.beacon.position.set(s.pos[0], 0, s.pos[1]);
-
-    if (s.kind === 'fight') {
-      for (let i = 0; i < (s.gang || 3); i++) {
-        const mesh = makePersonMesh(0x8a2a2a, 0xd9a077);
-        mesh.position.set(s.pos[0] + (i - 1.5) * 4, 0, s.pos[1] + (i % 2 ? 4 : -4));
-        this.scene.add(mesh);
-        this.gang.push({ mesh, x: mesh.position.x, z: mesh.position.z, hp: 60 });
-      }
-    }
-    if (s.kind === 'steal') {
-      const mesh = createCarMesh(0xe8c832, { sport: true });
-      mesh.position.set(s.pos[0], 0, s.pos[1]);
-      this.scene.add(mesh);
-      this.comet = { mesh, x: s.pos[0], z: s.pos[1], angle: 0 };
-    }
-    if (s.kind === 'timed') {
-      this.timer = s.seconds;
-      S.wanted = Math.max(S.wanted, s.wanted || 0);
-    }
-    if (s.kind === 'intercept') {
-      const mesh = createCarMesh(0xdddddd);
-      mesh.scale.set(1.2, 1.1, 1.4);
-      mesh.position.set(-170, 0, 20);
-      this.scene.add(mesh);
-      this.transport = { mesh, x: -170, z: 20, angle: Math.PI / 2, hp: 120, speed: 12 };
-    }
-    S.hudFlash(s.label);
+  _enterStep(S) {
+    this._clearActors();
+    this.ctx = {};
+    const step = this.currentStep();
+    if (!step) { this._finishMission(S); return; }
+    this.objective = { x: step.pos[0], z: step.pos[1], label: step.label };
+    this._handler(step).enter(S, this, step);
+    S.hudFlash(step.label);
   }
 
-  _finishStep(S) {
-    const s = this.currentStep();
-    if (s?.reward) {
-      S.cash += s.reward;
-      S.hudFlash(`+$${s.reward}`);
+  // Re-stage the current step from scratch (timed-step retry).
+  restartStep(S) {
+    this._enterStep(S);
+  }
+
+  _leaveStep(S) {
+    const step = this.currentStep();
+    this._handler(step).leave?.(S, this, step);
+  }
+
+  _completeStep(S) {
+    const step = this.currentStep();
+    this._leaveStep(S);
+    if (step?.reward) {
+      S.cash += step.reward;
+      S.hudFlash(`+$${step.reward}`);
     }
     S.audio.sting();
     this.step += 1;
     if (this.step >= this.current().steps.length) this._finishMission(S);
-    else this._setupStep(S);
+    else this._enterStep(S);
   }
 
   _finishMission(S) {
@@ -108,14 +298,13 @@ export class Missions {
     this.index += 1;
     this.step = 0;
     S.banner(`${this.current().name}`, this.current().intro, 5);
-    this._setupStep(S);
+    this._enterStep(S);
   }
 
   // Called when the player presses E near a steal target.
   trySteal(S) {
     if (!this.comet) return false;
-    const d = dist2(S.player.x, S.player.z, this.comet.x, this.comet.z);
-    if (d > 6) return false;
+    if (dist2(S.player.x, S.player.z, this.comet.x, this.comet.z) > 6) return false;
     // Swap the parked Comet in as the player's car.
     if (S.car) this.scene.remove(S.car.mesh);
     S.car = makePlayerCar(this.scene, this.comet.x, this.comet.z, 0xe8c832, true);
@@ -125,7 +314,7 @@ export class Missions {
     S.wanted = Math.max(S.wanted, 2);
     S.hudFlash('Comet GT stolen — the cops are coming!');
     S.audio.sting();
-    this._finishStep(S);
+    this._completeStep(S);
     return true;
   }
 
@@ -149,90 +338,9 @@ export class Missions {
 
   update(dt, S) {
     if (this.done) return;
-    const s = this.currentStep();
-    if (!s) return;
-    const px = S.player.x, pz = S.player.z;
-
-    if (s.kind === 'fight') {
-      this.updateGang(dt, S);
-      if (this.gang.length === 0) {
-        // Drop the briefcase where the fight happened; pick it up, then
-        // deliver it to Mara. Two legs, one step.
-        const dock = [s.pos[0], s.pos[1]];
-        const b = new THREE.Mesh(
-          new THREE.BoxGeometry(1.2, 0.35, 0.9),
-          new THREE.MeshStandardMaterial({ color: 0x6a4a1a, roughness: 0.4, metalness: 0.5 })
-        );
-        b.position.set(dock[0], 0.5, dock[1]);
-        this.scene.add(b);
-        this.briefcase = b;
-        this._pickupAt = dock;
-        this._deliverAt = MARA_HOME;
-        s.kind = 'goto';
-        s.label = 'Grab the briefcase and bring it to Mara';
-        s.pos = MARA_HOME;
-        this.objective = { x: dock[0], z: dock[1], label: 'Grab the briefcase' };
-        S.city.beacon.position.set(dock[0], 0, dock[1]);
-        S.hudFlash('Briefcase dropped — grab it!');
-      }
-      return;
-    }
-
-    if (s.kind === 'timed') {
-      this.timer -= dt;
-      if (this.timer <= 0) {
-        S.banner('TOO SLOW', 'The safehouse window closed. Try the run again.', 4);
-        S.audio.fail();
-        this._setupStep(S); // retry the same step
-        return;
-      }
-    }
-
-    if (s.kind === 'intercept' && this.transport) {
-      const t = this.transport;
-      // Transport loops east along the coastal highway (z = 20).
-      t.x += Math.sin(t.angle) * t.speed * dt;
-      t.z += Math.cos(t.angle) * t.speed * dt;
-      if (t.x > 175) { t.x = -175; }
-      t.mesh.position.set(t.x, 0, t.z);
-      t.mesh.rotation.y = t.angle;
-      this.objective = { x: t.x, z: t.z, label: 'Stop the Reserve transport' };
-      S.city.beacon.position.set(t.x, 0, t.z);
-      if (t.hp <= 0) {
-        // Haul secured on the spot; the step reward (mission 5, $1000)
-        // still pays out when the step finishes below.
-        S.cash += 250;
-        S.hudFlash('Transport stopped — haul secured +$250!');
-        this.scene.remove(t.mesh);
-        this.transport = null;
-        this._finishStep(S);
-      }
-      return;
-    }
-
-    if (s.kind === 'clear') {
-      // Objective: reach the spray shop while wanted; arrival clears it.
-      if (dist2(px, pz, s.pos[0], s.pos[1]) < 8) {
-        S.wanted = 0;
-        this._finishStep(S);
-      }
-      return;
-    }
-
-    if (s.kind === 'goto') {
-      // Briefcase pickup leg (mission 3 second half).
-      if (this._pickupAt) {
-        if (dist2(px, pz, this._pickupAt[0], this._pickupAt[1]) < 4) {
-          if (this.briefcase) { this.scene.remove(this.briefcase); this.briefcase = null; }
-          this._pickupAt = null;
-          this.objective = { x: this._deliverAt[0], z: this._deliverAt[1], label: 'Bring the briefcase to Mara' };
-          S.city.beacon.position.set(this._deliverAt[0], 0, this._deliverAt[1]);
-          S.audio.chime();
-        }
-        return;
-      }
-      if (dist2(px, pz, s.pos[0], s.pos[1]) < 6) this._finishStep(S);
-      return;
-    }
+    const step = this.currentStep();
+    if (!step) return;
+    const verdict = this._handler(step).tick(S, this, step, dt);
+    if (verdict === 'done') this._completeStep(S);
   }
 }

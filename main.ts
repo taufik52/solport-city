@@ -12,7 +12,7 @@
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -30,6 +30,24 @@ if (!existsSync(gameDir)) {
 }
 if (!existsSync(shotsDir)) {
   console.error(`SOLPORT build failed: ${shotsDir} is missing — add the 4 JPEG screenshots first.`);
+  process.exit(1);
+}
+// The entry is a static game: index.html must exist, and screenshots/ must
+// hold 1-4 real JPEG files (the scorer refuses anything else, so refuse
+// here first with a readable message instead of a cryptic dossier error).
+const entryHtml = join(gameDir, 'index.html');
+if (!existsSync(entryHtml)) {
+  console.error(`SOLPORT build failed: ${entryHtml} is missing — the game has no entrypoint.`);
+  process.exit(1);
+}
+const shotFiles = readdirSync(shotsDir).filter((f) => /\.(jpe?g)$/i.test(f));
+const oversized = shotFiles.filter((f) => statSync(join(shotsDir, f)).size > 262144);
+if (shotFiles.length < 1 || shotFiles.length > 4) {
+  console.error(`SOLPORT build failed: screenshots/ holds ${shotFiles.length} JPEG(s), expected 1-4.`);
+  process.exit(1);
+}
+if (oversized.length > 0) {
+  console.error(`SOLPORT build failed: screenshot(s) over 256 KiB: ${oversized.join(', ')}.`);
   process.exit(1);
 }
 

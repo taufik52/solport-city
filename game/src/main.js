@@ -47,6 +47,7 @@ const S = {
   packageSpots: SUN_PACKAGES,
   mode: 'menu', // menu | playing | paused | wasted | busted
   frozen: false, shotMode: null, busted: false,
+  district: null, // last flashed district name (city.districtAt)
   time: 0, saveTimer: 0,
   effects: [], // {mesh|light, ttl}
   packageMeshes: [], healthMeshes: [], weaponMeshes: [],
@@ -263,10 +264,13 @@ function tick() {
     S.audio.setEngine(S.car && !S.player.onFoot ? Math.abs(S.car.speed) / CONFIG.carMaxSpeed : 0, !S.player.onFoot);
     S.audio.siren(S.wanted > 0);
 
-    // Beacon pulse.
-    if (S.city.beacon.visible) {
-      const s = 1 + Math.sin(S.time * 3) * 0.15;
-      S.city.ring.scale.set(s, s, 1);
+    // Beacon pulse + district signpost: the city announces each new
+    // district the first time Jax crosses into it.
+    S.city.pulseBeacon(S.time);
+    const here = S.city.districtAt(S.player.x, S.player.z);
+    if (here !== S.district) {
+      S.district = here;
+      S.hudFlash(`— ${here} —`);
     }
 
     // Death / bust.
@@ -317,15 +321,15 @@ function startGame(fresh) {
     // A fresh run in the same page load must un-hide packages collected
     // in the previous run; boot-time visibility was set from the old save.
     for (const pkg of S.packageMeshes) pkg.mesh.visible = true;
-    S.missions.index = 0; S.missions.step = 0; S.missions.done = false;
+    S.missions.reset();
+    S.district = null;
     S.player.hp = CONFIG.playerHp;
     S.player.x = -140; S.player.z = -40;
     S.player.weapon = 'pistol'; S.player.ammo = { pistol: 24, smg: 0 };
     S.wanted = 0;
   } else {
     S.cash = S.saveData.cash;
-    S.missions.index = Math.min(S.saveData.missionIndex || 0, 4);
-    S.missions.step = 0;
+    S.missions.restore(S.saveData.missionIndex || 0);
     S.player.weapon = S.saveData.weapon || 'pistol';
     S.player.ammo = { ...S.player.ammo, ...(S.saveData.ammo || {}) };
   }
