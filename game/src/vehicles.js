@@ -51,7 +51,9 @@ export function makePlayerCar(scene, x, z, color = 0xc23b2e, sport = false) {
 }
 
 // Arcade driving: W/S speed, A/D steer (stronger at speed), Space drift.
-export function updatePlayerCar(car, input, dt, collide) {
+// gripScale comes from the weather (1.0 dry, lower in the rain): it scales
+// steering response, so a wet road genuinely slides more.
+export function updatePlayerCar(car, input, dt, collide, gripScale = 1) {
   const fwd = input.down('w') || input.down('arrowup');
   const back = input.down('s') || input.down('arrowdown');
   const left = input.down('a') || input.down('arrowleft');
@@ -64,7 +66,7 @@ export function updatePlayerCar(car, input, dt, collide) {
   car.speed = clamp(car.speed, -CONFIG.carReverseMax, CONFIG.carMaxSpeed);
   const steerTarget = (left ? 1 : 0) - (right ? 1 : 0);
   car.steer += (steerTarget - car.steer) * Math.min(1, dt * 8);
-  const grip = drift ? 0.45 : 1;
+  const grip = (drift ? 0.45 : 1) * gripScale;
   car.angle += car.steer * CONFIG.carTurn * grip * dt * clamp(Math.abs(car.speed) / 8, 0, 1) * (car.speed < 0 ? -1 : 1);
   const nx = car.x + Math.sin(car.angle) * car.speed * dt;
   const nz = car.z + Math.cos(car.angle) * car.speed * dt;

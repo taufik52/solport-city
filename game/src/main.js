@@ -10,6 +10,9 @@ import { AudioSys } from './audio.js';
 import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { Traffic, makePlayerCar, updatePlayerCar } from './vehicles.js';
+import { Weather } from './weather.js';
+import { CarRadio } from './radio.js';
+import { StuntTracker } from './stunts.js';
 import { Pedestrians } from './pedestrians.js';
 import { Police } from './police.js';
 import { Missions } from './missions.js';
@@ -41,6 +44,7 @@ const S = {
   input: new Input(canvas),
   audio: new AudioSys(),
   hud: null, city: null, traffic: null, peds: null, police: null, missions: null,
+  weather: null, radio: null, stunts: null,
   player: null, car: null,
   cash: CONFIG.startCash, wanted: 0,
   saveData: loadSave() || defaultSave(),
@@ -84,6 +88,9 @@ S.traffic = new Traffic(scene);
 S.peds = new Pedestrians(scene);
 S.police = new Police(scene);
 S.missions = new Missions(scene);
+S.weather = new Weather(scene);
+S.radio = new CarRadio();
+S.stunts = new StuntTracker();
 S.player = createPlayer(scene, -140, -40);
 S.player.hp = CONFIG.playerHp;
 S.player.weapon = S.saveData.weapon || 'pistol';
@@ -244,6 +251,7 @@ function tick() {
       S.hud.showPause(true);
     }
     if (S.input.pressed('m')) S.hudFlash(S.audio.toggleMute() ? 'Muted' : 'Sound on');
+    if (S.input.pressed('r') && !S.player.onFoot) S.hudFlash(S.radio.nextStation());
     if (S.input.pressed('e')) tryEnterExit(S);
     if (S.input.pressed('f') && S.player.onFoot) punch(S);
     if (S.input.pressed('1')) { S.player.weapon = 'pistol'; S.saveData.weapon = 'pistol'; }
@@ -251,7 +259,7 @@ function tick() {
     if (S.input.clickQueued && S.player.onFoot && S.player.weapon !== 'fists') shoot(S);
 
     if (S.player.onFoot) updateOnFoot(S, dt);
-    else if (S.car) updatePlayerCar(S.car, S.input, dt, S.collide);
+    else if (S.car) updatePlayerCar(S.car, S.input, dt, S.collide, S.weather.gripFactor());
 
     S.traffic.update(dt, S.player);
     S.peds.update(dt);
@@ -259,6 +267,15 @@ function tick() {
     S.police.update(dt, S);
     S.missions.update(dt, S);
     updatePickups();
+
+    // Weather, radio and stunts: each returns a HUD line when something
+    // worth announcing happened (a storm rolling in, a new song, a payout).
+    const wx = S.weather.update(dt, S);
+    if (wx) S.hudFlash(wx);
+    const tune = S.radio.update(dt, S);
+    if (tune) S.hudFlash(tune);
+    const stunt = S.stunts.update(dt, S);
+    if (stunt) S.hudFlash(stunt);
 
     // Engine hum + siren follow state.
     S.audio.setEngine(S.car && !S.player.onFoot ? Math.abs(S.car.speed) / CONFIG.carMaxSpeed : 0, !S.player.onFoot);
@@ -287,6 +304,10 @@ function tick() {
       writeSave(S.saveData);
     }
   }
+
+  // The radio cuts out the moment play stops (pause / menu / wasted),
+  // even though the rest of the loop keeps rendering the scene.
+  S.radio.update(dt, S);
 
   // Fade tracer / muzzle effects.
   for (let i = S.effects.length - 1; i >= 0; i--) {

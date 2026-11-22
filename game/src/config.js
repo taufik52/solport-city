@@ -36,6 +36,33 @@ export const CONFIG = {
   trafficCount: 16,
   pedCount: 24,
   maxPoliceCars: 5,
+  // Weather: automatic rotation + rain particles.
+  weather: {
+    changeEvery: 45, // seconds between change rolls
+    changeChance: 0.55, // chance a roll actually changes the weather
+    transition: 6, // seconds to blend between conditions
+    rainDrops: 1400,
+    rainArea: 90, // size of the rain box around the player
+    rainSpeed: 38, // fall speed (units/sec)
+  },
+  // Car radio: procedural WebAudio stations.
+  radio: {
+    volume: 0.16,
+    startStation: 0,
+  },
+  // Stunt scoring: drift / near-miss / top-speed cash.
+  stunts: {
+    driftCashPerSec: 12,
+    driftMinTime: 1.5, // shortest drift that pays
+    driftMinSpeed: 18,
+    nearMissRange: 7,
+    nearMissMinSpeed: 24,
+    nearMissCash: 25,
+    topSpeed: 35, // near the car's max speed
+    topSpeedHold: 2, // seconds held at top speed to pay
+    topSpeedCash: 40,
+    cooldown: 3, // seconds between near-miss / top-speed payouts
+  },
 };
 
 export const DISTRICTS = [
