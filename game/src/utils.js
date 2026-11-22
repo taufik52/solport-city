@@ -13,6 +13,9 @@ export function mulberry32(seed) {
 }
 
 export function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+export function clamp01(v) { return clamp(v, 0, 1); }
+// Smoothstep easing (0..1 in, 0..1 out) for camera and UI transitions.
+export function smoothstep(t) { const x = clamp01(t); return x * x * (3 - 2 * x); }
 export function lerp(a, b, t) { return a + (b - a) * t; }
 export function dist2(ax, az, bx, bz) {
   const dx = ax - bx, dz = az - bz;

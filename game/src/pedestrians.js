@@ -58,7 +58,8 @@ export class Pedestrians {
     for (const p of this.list) {
       const d = Math.hypot(p.x - x, p.z - z);
       if (d < radius) {
-        p.flee = 3;
+        // Closer to the shot = longer panic; a distant bang is a flinch.
+        p.flee = 3 + (1 - d / radius) * 2;
         p.angle = Math.atan2(p.x - x, p.z - z);
       }
     }
@@ -68,7 +69,8 @@ export class Pedestrians {
     for (const p of this.list) {
       if (p.flee > 0) {
         p.flee -= dt;
-        p.speed = 5;
+        // Panic sprint: 5 u/s, easing back to a walk as the fear fades.
+        p.speed = 5 + Math.min(2, p.flee);
       } else {
         p.speed = p.fare ? 0 : 1.4;
       }

@@ -4,16 +4,35 @@
 // Run with the dev server up: `node serve.ts` (http://localhost:8080).
 // Usage: node tools/shots.mjs
 import { createRequire } from 'node:module';
-import { readFileSync, statSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 
-const require = createRequire('/home/hatch/workspace/start-dev-competition-26/node_modules/playwright/package.json');
-const { chromium } = require('playwright');
-
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..');
+
+// Resolve Playwright without depending on one machine's layout: prefer a
+// repo-local install, then the legacy workspace path this script used to
+// hardcode, then whatever Node can resolve from the repo root.
+const PLAYWRIGHT_CANDIDATES = [
+  join(repo, 'node_modules', 'playwright', 'package.json'),
+  '/home/hatch/workspace/start-dev-competition-26/node_modules/playwright/package.json',
+  join(repo, 'node_modules', 'playwright-core', 'package.json'),
+];
+const found = PLAYWRIGHT_CANDIDATES.find((p) => existsSync(p));
+if (!found) {
+  console.error('Playwright not found. Tried:\n' + PLAYWRIGHT_CANDIDATES.map((p) => '  - ' + p).join('\n'));
+  console.error('Install it in the repo (`npm i -D playwright` + `npx playwright install chromium`) and retry.');
+  process.exit(1);
+}
+const require = createRequire(found);
+const { chromium } = require('playwright');
+console.log(`Using Playwright from ${found}`);
 const shots = JSON.parse(readFileSync(join(repo, 'shots.json'), 'utf8'));
+if (!Array.isArray(shots) || shots.length === 0) {
+  console.error('shots.json must list at least one shot ({name, query}); nothing to capture.');
+  process.exit(1);
+}
 mkdirSync(join(repo, 'screenshots'), { recursive: true });
 
 const browser = await chromium.launch({ headless: true, args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });

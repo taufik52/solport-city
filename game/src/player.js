@@ -169,4 +169,15 @@ export function punch(S) {
       return;
     }
   }
+  // A fist to a cop knocks him down — but the precinct notices.
+  for (const c of S.police.cops) {
+    if (dist2(p.x, p.z, c.x, c.z) < 2.5) {
+      S.scene.remove(c.mesh);
+      S.police.cops.splice(S.police.cops.indexOf(c), 1);
+      S.saveData.stats.kills += 1;
+      S.wanted = Math.min(5, S.wanted + 1);
+      S.hudFlash('Cop down — wanted level up!');
+      return;
+    }
+  }
 }

@@ -10,14 +10,16 @@ import { CONFIG } from './config.js';
 const PALETTE = ['#c96f4a', '#d9a441', '#7d9bb5', '#8a7f8d', '#b5b0a1', '#6f8f7a', '#a8513f', '#5d7d8c'];
 const WINDOW_LIT = '#ffd98a';
 
-function windowTexture(base) {
+function windowTexture(base, rng) {
   const c = document.createElement('canvas');
   c.width = 128; c.height = 256;
   const g = c.getContext('2d');
   g.fillStyle = base; g.fillRect(0, 0, 128, 256);
   for (let y = 14; y < 246; y += 26) {
     for (let x = 10; x < 118; x += 22) {
-      g.fillStyle = Math.random() < 0.4 ? WINDOW_LIT : 'rgba(18,22,32,0.9)';
+      // Seeded, not Math.random: the city must look identical on every
+      // load (and in every ?shot= screenshot).
+      g.fillStyle = rng() < 0.4 ? WINDOW_LIT : 'rgba(18,22,32,0.9)';
       g.fillRect(x, y, 13, 15);
     }
   }
@@ -140,7 +142,7 @@ export function buildCity(scene) {
         const oz = n === 1 ? 0 : (rng() - 0.5) * 12;
         const color = port ? '#8a6f5a' : pick(rng, PALETTE);
         const mat = new THREE.MeshStandardMaterial({
-          map: port ? null : windowTexture(color), color: port ? 0x8a6f5a : 0xffffff, roughness: 0.9,
+          map: port ? null : windowTexture(color, rng), color: port ? 0x8a6f5a : 0xffffff, roughness: 0.9,
         });
         const b = new THREE.Mesh(boxGeo, mat);
         b.scale.set(w, h, d);

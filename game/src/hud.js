@@ -69,8 +69,8 @@ export class HUD {
       if (this._flashTimer <= 0) this.el.flash.classList.add('hidden');
     }
     const hp = Math.max(0, Math.round(S.player.hp));
-    this.el.health.style.width = `${hp}%`;
-    this.el.healthText.textContent = `HP ${hp}`;
+    this.el.health.style.width = `${(hp / CONFIG.playerHp) * 100}%`;
+    this.el.healthText.textContent = `HP ${hp}/${CONFIG.playerHp}`;
     this.el.cash.textContent = `$${S.cash.toLocaleString()}`;
     this.el.respect.textContent = `Respect ${S.saveData.respect}  •  Packages ${S.saveData.packages.length}/10`;
     this.el.stars.textContent = '★'.repeat(S.wanted) + '☆'.repeat(5 - S.wanted);
@@ -91,7 +91,7 @@ export class HUD {
   _drawMinimap(S) {
     const ctx = this.mapCtx;
     const W = 170, H = 170;
-    const scale = W / 420; // world -210..210 -> 0..170
+    const scale = W / (CONFIG.groundHalf * 2 + 20); // world -210..210 -> 0..170
     const toX = (x) => (x + 210) * scale;
     const toY = (z) => (z + 210) * scale;
     ctx.clearRect(0, 0, W, H);
@@ -134,6 +134,5 @@ export class HUD {
     ctx.fillStyle = '#ffffff';
     ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(4, 5); ctx.lineTo(-4, 5); ctx.closePath(); ctx.fill();
     ctx.restore();
-    void CONFIG;
   }
 }

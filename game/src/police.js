@@ -9,6 +9,13 @@ import { makePersonMesh } from './pedestrians.js';
 import { clamp, angleLerp, dist2 } from './utils.js';
 import { CONFIG, SPRAY_SHOP } from './config.js';
 
+// Collision damage, per second of contact: a cruiser ramming the player's
+// car grinds HP slowly (6/s); the same ram on foot hits twice as hard.
+const RAM_DAMAGE_PER_SEC = 6;
+const FOOT_RAM_DAMAGE_PER_SEC = 12;
+// A cop must stay within bust range this long before the bust lands.
+const BUST_SECONDS = 2.5;
+
 export class Police {
   constructor(scene) {
     this.scene = scene;
@@ -86,9 +93,9 @@ export class Police {
         anyNear = true;
         if (driving) {
           S.car.speed *= 0.55;
-          S.player.hp -= 6 * dt * 10 * 0.1;
+          S.player.hp -= RAM_DAMAGE_PER_SEC * dt;
         } else {
-          S.player.hp -= 12 * dt;
+          S.player.hp -= FOOT_RAM_DAMAGE_PER_SEC * dt;
         }
         S.audio.crash();
       }
@@ -110,7 +117,7 @@ export class Police {
     // Bust timer: on foot, a cop within 3.2m builds the bust.
     if (!driving && this.cops.some((c) => dist2(c.x, c.z, px, pz) < 3.2)) {
       this.bustTimer += dt;
-      if (this.bustTimer > 2.5) { S.busted = true; this.bustTimer = 0; }
+      if (this.bustTimer > BUST_SECONDS) { S.busted = true; this.bustTimer = 0; }
     } else {
       this.bustTimer = Math.max(0, this.bustTimer - dt);
     }

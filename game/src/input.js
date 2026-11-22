@@ -16,6 +16,8 @@ export class Input {
 
     window.addEventListener('keydown', (e) => {
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      // Held-key auto-repeat must not re-trigger edge actions (pause, E, F…).
+      if (e.repeat) return;
       const k = e.key.toLowerCase();
       if (!this.keys.has(k)) this._pressed.add(k);
       this.keys.add(k);
@@ -28,6 +30,8 @@ export class Input {
       this._dragging = true; this._lastX = e.clientX; this._lastY = e.clientY;
       if (e.button === 0) this.clickQueued = true;
     });
+    // Right-drag orbits the camera too; never pop the browser menu mid-game.
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mouseup', () => { this._dragging = false; });
     window.addEventListener('mousemove', (e) => {
       if (!this._dragging) return;

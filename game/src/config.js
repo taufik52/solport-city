@@ -29,11 +29,12 @@ export const CONFIG = {
   pistolRange: 70,
   // Wanted
   wantedDecayDelay: 6, // seconds out of sight before a star decays
-  sprayCost: 150,
+  sprayCost: 125,
   hospitalCost: 200,
+  bailCost: 150,
   // World population
-  trafficCount: 14,
-  pedCount: 20,
+  trafficCount: 16,
+  pedCount: 24,
   maxPoliceCars: 5,
 };
 
@@ -81,7 +82,7 @@ export const MISSIONS = [
     name: 'Getaway',
     intro: 'Three stars, roadblocks everywhere. Get to the safehouse before the timer runs out.',
     steps: [
-      { kind: 'timed', label: 'Reach the Northside safehouse in time', pos: [120, -140], seconds: 75, wanted: 3, reward: 800 },
+      { kind: 'timed', label: 'Reach the Northside safehouse in time', pos: [120, -140], seconds: 90, wanted: 3, reward: 800 },
     ],
   },
   {

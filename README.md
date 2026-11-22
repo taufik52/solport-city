@@ -24,6 +24,31 @@ http://localhost:8080) and open it in a desktop browser.
 - **E** enter / exit car · **Click** shoot · **F** punch · **Space** handbrake
 - **1 / 2** pistol / SMG · **Esc / P** pause · **M** mute
 
+## Polish pass (22 Nov 2026 resubmit)
+
+- **Respawn is fair now**: after WASTED / BUSTED, Jax keeps at least 12
+  pistol rounds (Mara slips him a fresh mag with the bill), the car stops,
+  and a NEW GAME in the same tab un-hides sun-packages collected before.
+- **Pause actually pauses the noise**: sirens and the engine hum stop on
+  the pause screen instead of wailing underneath it.
+- **Traffic yields**: AI cars crawl when the player is right ahead of them
+  instead of rear-ending a stopped car.
+- **Fists matter**: punching a cop knocks him down (and raises heat, as it
+  should). Pedestrians panic longer the closer the gunshot was.
+- **Balance**: Spray Shop $150 → $125, Getaway timer 75s → 90s, more
+  traffic (14 → 16) and pedestrians (20 → 24) for a livelier city.
+- **Saves are validated**: a corrupt or tampered localStorage save is
+  sanitised field-by-field (cash, mission, packages, ammo) instead of
+  crashing the game or warping progress.
+- **Deterministic city**: lit windows now use the seeded RNG, so every load
+  (and every `?shot=` screenshot) looks identical.
+- **Accessibility**: HUD status text, wanted stars, minimap and flash
+  messages carry ARIA roles/labels; menu buttons are explicit buttons.
+- **Tooling**: `main.ts` fails loudly on a missing `game/` or
+  `screenshots/` and validates the dossier; `tools/shots.mjs` resolves
+  Playwright from the repo first with a legacy-path fallback; `serve.ts`
+  refuses non-GET/HEAD requests and sends security headers.
+
 ## Systems
 
 - **Open city**: procedural low-poly Solport — road grid, waterfront, beach,

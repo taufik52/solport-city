@@ -38,6 +38,11 @@ const MIME: Record<string, string> = {
 };
 
 createServer((request, response) => {
+  // Static files only: refuse anything that is not a plain read.
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    response.writeHead(405, { allow: 'GET, HEAD' }).end('method not allowed');
+    return;
+  }
   const url = new URL(request.url ?? '/', 'http://localhost');
   let pathname: string;
   try {
@@ -65,8 +70,20 @@ createServer((request, response) => {
     'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
     'content-length': size,
     'cache-control': 'no-store',
+    // The game is fully static; lock the page to itself. script-src needs
+    // 'unsafe-inline' because game/index.html carries an inline import map
+    // (no inline code runs besides that map); styles are inline too.
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; media-src 'self'; connect-src 'none'; font-src 'self'",
+    'referrer-policy': 'no-referrer',
   });
-  createReadStream(file).pipe(response);
+  const stream = createReadStream(file);
+  stream.on('error', () => {
+    if (!response.headersSent) response.writeHead(500);
+    response.end('read error');
+  });
+  if (request.method === 'HEAD') { response.end(); return; }
+  stream.pipe(response);
 }).listen(port, '127.0.0.1', () => {
   console.log(`game/ is on http://localhost:${port}`);
 });

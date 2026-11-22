@@ -199,8 +199,10 @@ export class Missions {
       this.objective = { x: t.x, z: t.z, label: 'Stop the Reserve transport' };
       S.city.beacon.position.set(t.x, 0, t.z);
       if (t.hp <= 0) {
-        S.cash += 0;
-        S.hudFlash('Transport stopped — grab the haul!');
+        // Haul secured on the spot; the step reward (mission 5, $1000)
+        // still pays out when the step finishes below.
+        S.cash += 250;
+        S.hudFlash('Transport stopped — haul secured +$250!');
         this.scene.remove(t.mesh);
         this.transport = null;
         this._finishStep(S);

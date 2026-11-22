@@ -142,6 +142,11 @@ function updateCamera(dt) {
 function respawn(reason) {
   S.player.hp = CONFIG.playerHp;
   S.wanted = 0;
+  S.busted = false;
+  S.saveTimer = 0;
+  // Getting back on the streets with an empty pistol is a soft-lock:
+  // Mara slips Jax a fresh mag with the hospital bill / bail.
+  if ((S.player.ammo.pistol || 0) < 12) S.player.ammo.pistol = 12;
   S.police.clearAll(scene);
   S.player.x = HOSPITAL[0]; S.player.z = HOSPITAL[1];
   S.player.onFoot = true;
@@ -155,7 +160,9 @@ function respawn(reason) {
 function die(reason) {
   if (S.mode !== 'playing') return;
   S.mode = reason;
-  const cost = reason === 'wasted' ? 200 : 150;
+  // Freeze the car so the WASTED/BUSTED screen does not sit over a crash.
+  if (S.car) S.car.speed = 0;
+  const cost = reason === 'wasted' ? CONFIG.hospitalCost : CONFIG.bailCost;
   S.cash = Math.max(0, S.cash - cost);
   if (reason === 'wasted') S.saveData.stats.deaths += 1;
   else S.saveData.stats.busted += 1;
@@ -231,6 +238,8 @@ function tick() {
     // Edge-triggered keys.
     if (S.input.pressed('escape') || S.input.pressed('p')) {
       S.mode = 'paused';
+      S.audio.siren(false); // sirens must not keep wailing over the pause screen
+      S.audio.setEngine(0, false);
       S.hud.showPause(true);
     }
     if (S.input.pressed('m')) S.hudFlash(S.audio.toggleMute() ? 'Muted' : 'Sound on');
@@ -305,6 +314,9 @@ function startGame(fresh) {
     clearSave();
     S.saveData = defaultSave();
     S.cash = CONFIG.startCash;
+    // A fresh run in the same page load must un-hide packages collected
+    // in the previous run; boot-time visibility was set from the old save.
+    for (const pkg of S.packageMeshes) pkg.mesh.visible = true;
     S.missions.index = 0; S.missions.step = 0; S.missions.done = false;
     S.player.hp = CONFIG.playerHp;
     S.player.x = -140; S.player.z = -40;
@@ -324,13 +336,14 @@ function startGame(fresh) {
   S.missions.start(S);
 }
 
-document.getElementById('btn-new').addEventListener('click', () => startGame(true));
-document.getElementById('btn-continue').addEventListener('click', () => startGame(false));
+document.getElementById('btn-new').addEventListener('click', () => { S.audio.ensure(); S.audio.uiClick(); startGame(true); });
+document.getElementById('btn-continue').addEventListener('click', () => { S.audio.ensure(); S.audio.uiClick(); startGame(false); });
 document.getElementById('btn-resume').addEventListener('click', () => {
+  S.audio.uiClick();
   S.mode = 'playing';
   S.hud.showPause(false);
 });
-document.getElementById('end-btn').addEventListener('click', () => respawn(S.mode));
+document.getElementById('end-btn').addEventListener('click', () => { S.audio.uiClick(); respawn(S.mode); });
 document.getElementById('menu').addEventListener('click', (e) => {
   if (e.target.id === 'menu') S.audio.ensure();
 });

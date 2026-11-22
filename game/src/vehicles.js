@@ -109,7 +109,13 @@ export class Traffic {
 
   update(dt, playerPos) {
     for (const c of this.cars) {
-      c.along += c.dir * c.speed * dt;
+      // Yield: crawl when the player is right in front of this car,
+      // so traffic does not blindly rear-end a stopped player car.
+      const px = c.axis === 'x' ? c.along : c.line;
+      const pz = c.axis === 'x' ? c.line : c.along;
+      const dPlayer = Math.hypot(px - playerPos.x, pz - playerPos.z);
+      const speed = dPlayer < 12 ? c.speed * 0.45 : c.speed;
+      c.along += c.dir * speed * dt;
       // Turn at an intersection sometimes; otherwise keep straight.
       if (Math.abs(c.along % CONFIG.roadStep) < c.speed * dt * 0.6 && this.rng() < 0.25) {
         // Crossing point: current along becomes the new road line,

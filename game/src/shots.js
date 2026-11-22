@@ -142,10 +142,15 @@ export function applyShot(S, name) {
       c.mesh.position.set(-160, 0, c.along); c.mesh.rotation.y = 0;
     });
     setTimeOfDay(scene, S.city.sun, 'sunset');
+    // A parked convertible watching the sunset from the beach side,
+    // so the highway is not empty in the foreground.
+    const parked = createCarMesh(0xe07b39, { sport: true });
+    parked.position.set(-172, 0, 34);
+    parked.rotation.y = Math.PI / 2;
+    scene.add(parked);
     S.camera.position.set(-160, 7, -24);
     S.camera.lookAt(-160, 2, 40);
     S.hud.banner('COASTAL HIGHWAY', 'Sunset run — 109 mph', 999);
-    void createCarMesh;
   }
 
   // Screenshots read better without the big centre banner covering the

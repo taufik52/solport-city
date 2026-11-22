@@ -30,6 +30,13 @@ export class AudioSys {
       this.engineGain.gain.value = 0;
       this.engineOsc.connect(filt).connect(this.engineGain).connect(this.ctx.destination);
       this.engineOsc.start();
+      // A hidden tab must not keep the siren interval (or the engine)
+      // running unheard: suspend the context, resume when visible again.
+      document.addEventListener('visibilitychange', () => {
+        if (!this.ctx) return;
+        if (document.hidden) this.ctx.suspend();
+        else if (this.ctx.state === 'suspended') this.ctx.resume();
+      });
     } catch (e) { this.ctx = null; }
   }
 
@@ -69,6 +76,8 @@ export class AudioSys {
 
   shot() { this._noise(0.14, 0.5, 1800); this._tone(160, 0.08, 0.25, 'square'); }
   punch() { this._noise(0.08, 0.3, 900); }
+  // Short UI click for menu buttons (created lazily; silent until ensure()).
+  uiClick() { this._tone(660, 0.06, 0.12, 'triangle'); }
   chime() { this._tone(880, 0.12, 0.2); this._tone(1318, 0.22, 0.2, 'sine', 0.1); }
   sting() { // mission complete: rising arpeggio
     [523, 659, 784, 1046].forEach((f, i) => this._tone(f, 0.22, 0.22, 'triangle', i * 0.09));
