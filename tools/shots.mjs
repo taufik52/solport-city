@@ -28,9 +28,23 @@ if (!found) {
 const require = createRequire(found);
 const { chromium } = require('playwright');
 console.log(`Using Playwright from ${found}`);
-const shots = JSON.parse(readFileSync(join(repo, 'shots.json'), 'utf8'));
+// Shot list: shots.json at the repo root when present, else the built-in
+// default (the four staged shots). shots.json was removed from the repo in
+// the resubmit polish pass; the tool keeps working without it.
+const DEFAULT_SHOTS = [
+  { name: '1-chase.jpg', query: '?shot=chase&seed=1' },
+  { name: '2-mission.jpg', query: '?shot=mission&seed=1' },
+  { name: '3-city.jpg', query: '?shot=city&seed=1' },
+  { name: '4-drive.jpg', query: '?shot=drive&seed=1' },
+];
+let shots = DEFAULT_SHOTS;
+const shotsFile = join(repo, 'shots.json');
+if (existsSync(shotsFile)) {
+  const parsed = JSON.parse(readFileSync(shotsFile, 'utf8'));
+  if (Array.isArray(parsed) && parsed.length > 0) shots = parsed;
+}
 if (!Array.isArray(shots) || shots.length === 0) {
-  console.error('shots.json must list at least one shot ({name, query}); nothing to capture.');
+  console.error('No shots configured (shots.json or built-in default); nothing to capture.');
   process.exit(1);
 }
 mkdirSync(join(repo, 'screenshots'), { recursive: true });
